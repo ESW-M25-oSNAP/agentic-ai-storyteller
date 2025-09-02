@@ -1,0 +1,100 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+*.pkl
+*.egg
+*.egg-info/
+.eggs/
+dist/
+build/
+develop-eggs/
+.installed.cfg
+*.manifest
+*.spec
+*.so
+*.dll
+*.log
+*.pot
+*.mo
+
+# Virtualenvs (for uv / venv / virtualenv)
+.venv/
+venv/
+.env/
+env/
+.uv/
+
+# Jupyter / IPython
+.ipynb_checkpoints
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# ---- C++ ----
+*.o
+*.obj
+*.so
+*.dll
+*.exe
+*.out
+*.app
+*.dylib
+*.a
+*.lib
+*.stackdump
+
+# Build dirs
+/build/
+bin/
+Debug/
+Release/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# ---- Java ----
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+*.tar.gz
+*.rar
+hs_err_pid*
+replay_pid*
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+release.properties
+
+# Gradle
+.gradle/
+build/
+
+# ---- Kotlin ----
+# (shares Gradle & IntelliJ with Java)
+*.kotlin_module
+*.ktx
+
+# ---- IDE/Editor ----
+# IntelliJ IDEA / Android Studio
+.idea/
+*.iml
+
+# VSCode
+.vscode/
+
+# Eclipse
+.project
+.classpath
+.settings/
