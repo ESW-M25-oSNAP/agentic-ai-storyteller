@@ -1,0 +1,3 @@
+cropped/IMG_20250928_061818.raw
+cropped/IMG_20250928_070556.raw
+cropped/IMG_20250928_092838.raw
