@@ -1,7 +1,8 @@
-#STRUCTURE:
+# STRUCTURE:
 
 These directories are present in /data/local/tmp on the edge-android device. The desired directory structure tree is as follows:
 
+```c
 /data/local/tmp
 ├── agent-bundle
 │   ├── primitive_agent.sh
@@ -313,3 +314,4 @@ These directories are present in /data/local/tmp on the edge-android device. The
         └── word_rnn.dlc
 
 46 directories, 264 files
+```
