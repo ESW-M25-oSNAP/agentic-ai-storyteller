@@ -1,6 +1,7 @@
 # STRUCTURE:
 
 These directories are present in /data/local/tmp on the edge-android device. The desired directory structure tree is as follows:
+The ```.so``` files are too big to be pushed on to the github. They are in the SDK.
 
 ```c
 src
