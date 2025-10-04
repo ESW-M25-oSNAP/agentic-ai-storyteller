@@ -1,3 +1,0 @@
-Platform Validator Results:
-Runtime,Runtime supported,Library Prerequisites,Library Version,Runtime Core Version,Unit Test,Overall Result
-GPU,Supported,Found,Not Queried,Not Queried,Passed,Passed
