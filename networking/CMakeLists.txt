@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 project(AgentNetwork)
-
 set(CMAKE_CXX_STANDARD 17)
-add_executable(agent src/device_client.cpp src/main.cpp)
+set(CMAKE_CXX_COMPILER $ENV{ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++)
+add_executable(agent src/DeviceClient.cpp src/main.cpp)
 target_include_directories(agent PRIVATE include)
-# Link OpenCV or TFLite if needed
+target_link_libraries(agent android log)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIE")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIE")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -pie")
