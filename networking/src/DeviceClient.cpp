@@ -6,6 +6,7 @@
 #include <fstream>
 #include <numeric>
 #include <chrono>
+#include <sstream>
 
 #define LOG_TAG "DeviceClient"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -130,10 +131,106 @@ int DeviceClient::get_battery_level() {
 }
 
 void DeviceClient::handle_message(const Message& msg) {
-    if (msg.type == "task") {
-        // Placeholder: Handle classify, segment, generate_story
+    if (msg.type == "bid_request") {
+        handle_bid_request(msg);
+    } else if (msg.type == "task") {
+        handle_task(msg);
+    }
+}
+
+void DeviceClient::handle_bid_request(const Message& msg) {
+    LOGI("Received bid request for task %s", msg.task_id.c_str());
+    
+    // Send bid with current metrics
+    json bid_data = {
+        {"cpu_load", get_cpu_load()},
+        {"battery", get_battery_level()},
+        {"image_model_free", image_model_free},
+        {"text_model_free", text_model_free},
+        {"timestamp", std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count()}
+    };
+    
+    send_message(Message{"bid", agent_id, msg.task_id, msg.subtask, bid_data});
+    LOGI("Sent bid for task %s with CPU load %.2f", msg.task_id.c_str(), get_cpu_load());
+}
+
+void DeviceClient::handle_task(const Message& msg) {
+    LOGI("Received task %s, subtask: %s", msg.task_id.c_str(), msg.subtask.c_str());
+    
+    if (msg.subtask == "classify" && msg.data.contains("image_base64")) {
+        handle_image_classification_task(msg);
+    } else {
+        // Placeholder for other tasks
         json result = {{"status", "completed"}};
         send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
         send_status();
     }
+}
+
+void DeviceClient::handle_image_classification_task(const Message& msg) {
+    try {
+        // Extract image data
+        std::string image_base64 = msg.data["image_base64"];
+        std::string output_path = msg.data.contains("output_path") ? 
+            msg.data["output_path"].get<std::string>() : "/data/local/tmp/received-image";
+        
+        // Decode base64 image
+        std::string decoded_image = decode_base64(image_base64);
+        
+        // Save image to specified path
+        std::ofstream file(output_path, std::ios::binary);
+        if (file.is_open()) {
+            file.write(decoded_image.c_str(), decoded_image.length());
+            file.close();
+            LOGI("Image saved to %s", output_path.c_str());
+            
+            // Mark image model as busy
+            image_model_free = false;
+            
+            // Send success result
+            json result = {
+                {"status", "image_received"},
+                {"output_path", output_path},
+                {"image_size", decoded_image.length()}
+            };
+            send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
+            
+            // Mark image model as free again
+            image_model_free = true;
+        } else {
+            LOGE("Failed to save image to %s", output_path.c_str());
+            json result = {{"status", "error"}, {"message", "Failed to save image"}};
+            send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
+        }
+        
+        send_status();
+        
+    } catch (const std::exception& e) {
+        LOGE("Error handling image classification task: %s", e.what());
+        json result = {{"status", "error"}, {"message", e.what()}};
+        send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
+    }
+}
+
+std::string DeviceClient::decode_base64(const std::string& encoded) {
+    // Simple base64 decoder implementation
+    const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string decoded;
+    int val = 0, valb = -8;
+    
+    for (char c : encoded) {
+        if (c == '=') break;
+        auto pos = chars.find(c);
+        if (pos == std::string::npos) continue;
+        
+        val = (val << 6) + pos;
+        valb += 6;
+        if (valb >= 0) {
+            decoded.push_back(char((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    
+    return decoded;
 }

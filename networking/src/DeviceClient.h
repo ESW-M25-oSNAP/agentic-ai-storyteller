@@ -38,6 +38,10 @@ private:
     float get_cpu_load();
     int get_battery_level();
     void handle_message(const Message& msg);
+    void handle_bid_request(const Message& msg);
+    void handle_task(const Message& msg);
+    void handle_image_classification_task(const Message& msg);
+    std::string decode_base64(const std::string& encoded);
 };
 
 #endif
