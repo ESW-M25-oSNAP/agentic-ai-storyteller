@@ -64,7 +64,8 @@ run_genie() {
 
 copy_latest_images() {
     num=$1
-    camera_dir="/storage/emulated/0/Pictures"
+    # The below lines are to be changed based on the given file path. Currently it says ***/DCIM/Camera for Anil Nayak's phone 
+    camera_dir="/storage/emulated/0/DCIM/Camera" 
     target_dir="../snpe-bundle/images"
     mkdir -p "$target_dir"
 

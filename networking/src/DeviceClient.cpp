@@ -7,6 +7,7 @@
 #include <numeric>
 #include <chrono>
 #include <sstream>
+#include <cstring>
 
 #define LOG_TAG "DeviceClient"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -58,8 +59,10 @@ bool DeviceClient::connect() {
 }
 
 void DeviceClient::listen() {
-    char buffer[4096];
+    std::string message_buffer;
+    
     while (true) {
+        char buffer[8192];
         ssize_t len = recv(sock, buffer, sizeof(buffer) - 1, 0);
         if (len <= 0) {
             LOGE("Connection lost, reconnecting...");
@@ -68,11 +71,72 @@ void DeviceClient::listen() {
             continue;
         }
         buffer[len] = '\0';
-        try {
-            json msg = json::parse(buffer);
-            handle_message(Message{msg["type"], msg["agent_id"], msg["task_id"], msg["subtask"], msg["data"]});
-        } catch (const std::exception& e) {
-            LOGE("Parse error: %s", e.what());
+        message_buffer += std::string(buffer);
+        
+        // Look for complete JSON messages (simple approach)
+        size_t start = 0;
+        while (start < message_buffer.length()) {
+            // Find the start of a JSON object
+            size_t json_start = message_buffer.find('{', start);
+            if (json_start == std::string::npos) break;
+            
+            // Find the matching closing brace
+            int brace_count = 0;
+            size_t json_end = json_start;
+            bool in_string = false;
+            bool escaped = false;
+            
+            for (size_t i = json_start; i < message_buffer.length(); i++) {
+                char c = message_buffer[i];
+                
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                
+                if (c == '\\' && in_string) {
+                    escaped = true;
+                    continue;
+                }
+                
+                if (c == '"') {
+                    in_string = !in_string;
+                    continue;
+                }
+                
+                if (!in_string) {
+                    if (c == '{') brace_count++;
+                    else if (c == '}') {
+                        brace_count--;
+                        if (brace_count == 0) {
+                            json_end = i + 1;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (brace_count == 0) {
+                // We have a complete JSON message
+                std::string json_str = message_buffer.substr(json_start, json_end - json_start);
+                try {
+                    json msg = json::parse(json_str);
+                    LOGI("Received message type: %s", msg["type"].get<std::string>().c_str());
+                    handle_message(Message{msg["type"], msg["agent_id"], msg["task_id"], msg["subtask"], msg["data"]});
+                    start = json_end;
+                } catch (const std::exception& e) {
+                    LOGE("Parse error: %s", e.what());
+                    start = json_start + 1;
+                }
+            } else {
+                // Incomplete message, wait for more data
+                break;
+            }
+        }
+        
+        // Remove processed messages from buffer
+        if (start > 0) {
+            message_buffer = message_buffer.substr(start);
         }
     }
 }
@@ -172,35 +236,88 @@ void DeviceClient::handle_image_classification_task(const Message& msg) {
     try {
         // Extract image data
         std::string image_base64 = msg.data["image_base64"];
-        std::string output_path = msg.data.contains("output_path") ? 
-            msg.data["output_path"].get<std::string>() : "/data/local/tmp/received-image";
+        
+        // Create a proper image filename with timestamp  
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        std::string image_filename = "image_" + std::to_string(time_t) + ".jpg";
+        std::string output_path = "/data/local/tmp/" + image_filename;
+        
+        // Save directly to /data/local/tmp which we know works
+        LOGI("Saving image as: %s", image_filename.c_str());
         
         // Decode base64 image
         std::string decoded_image = decode_base64(image_base64);
+        LOGI("Decoded image size: %zu bytes", decoded_image.length());
         
         // Save image to specified path
+        LOGI("Attempting to save image to: %s", output_path.c_str());
         std::ofstream file(output_path, std::ios::binary);
         if (file.is_open()) {
             file.write(decoded_image.c_str(), decoded_image.length());
             file.close();
-            LOGI("Image saved to %s", output_path.c_str());
+            LOGI("Image saved successfully to %s, size: %zu bytes", output_path.c_str(), decoded_image.length());
+            
+            // Verify the file was actually written
+            std::ifstream verify_file(output_path, std::ios::binary | std::ios::ate);
+            if (verify_file.is_open()) {
+                size_t file_size = verify_file.tellg();
+                LOGI("Verified: File exists with size %zu bytes", file_size);
+                verify_file.close();
+            } else {
+                LOGE("Verification failed: Cannot read back the saved file");
+            }
             
             // Mark image model as busy
             image_model_free = false;
             
-            // Send success result
-            json result = {
-                {"status", "image_received"},
-                {"output_path", output_path},
-                {"image_size", decoded_image.length()}
-            };
-            send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
+            // Run Inception-V3 classification
+            std::string classification_result = run_inception_v3(output_path);
             
             // Mark image model as free again
             image_model_free = true;
+            
+            if (!classification_result.empty()) {
+                // Send classification result
+                json result = {
+                    {"status", "classification_complete"},
+                    {"output_path", output_path},
+                    {"image_size", decoded_image.length()},
+                    {"classification", classification_result}
+                };
+                send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
+                LOGI("Classification completed: %s", classification_result.c_str());
+            } else {
+                json result = {{"status", "error"}, {"message", "Classification failed"}};
+                send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
+            }
         } else {
-            LOGE("Failed to save image to %s", output_path.c_str());
-            json result = {{"status", "error"}, {"message", "Failed to save image"}};
+            LOGE("Failed to open file for writing: %s", output_path.c_str());
+            
+            // Try to get more information about why it failed
+            std::string ls_cmd = "ls -la /data/local/tmp/received-images/ 2>&1";
+            FILE* ls_fp = popen(ls_cmd.c_str(), "r");
+            if (ls_fp) {
+                char ls_output[512];
+                LOGE("Directory listing:");
+                while (fgets(ls_output, sizeof(ls_output), ls_fp)) {
+                    LOGE("  %s", ls_output);
+                }
+                pclose(ls_fp);
+            }
+            
+            // Check permissions
+            std::string perm_cmd = "ls -ld /data/local/tmp/received-images 2>&1";
+            FILE* perm_fp = popen(perm_cmd.c_str(), "r");
+            if (perm_fp) {
+                char perm_output[256];
+                if (fgets(perm_output, sizeof(perm_output), perm_fp)) {
+                    LOGE("Directory permissions: %s", perm_output);
+                }
+                pclose(perm_fp);
+            }
+            
+            json result = {{"status", "error"}, {"message", "Failed to open file for writing"}};
             send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
         }
         
@@ -211,6 +328,200 @@ void DeviceClient::handle_image_classification_task(const Message& msg) {
         json result = {{"status", "error"}, {"message", e.what()}};
         send_message(Message{"result", agent_id, msg.task_id, msg.subtask, result});
     }
+}
+
+std::string DeviceClient::run_inception_v3(const std::string& image_path) {
+    LOGI("Running Inception-V3 on image: %s", image_path.c_str());
+    
+    try {
+        // Step 1: Move image to SNPE bundle directory
+        if (!move_image_to_snpe_bundle(image_path)) {
+            LOGE("Failed to move image to SNPE bundle");
+            return "";
+        }
+        
+        // Step 2: Preprocess image (using the stored filename)
+        if (!preprocess_image(current_image_filename)) {
+            LOGE("Failed to preprocess image");
+            return "";
+        }
+        
+        // Step 3: Run SNPE inference
+        if (!run_snpe_inference()) {
+            LOGE("SNPE inference failed");
+            return "";
+        }
+        
+        // Step 4: Post-process and get results
+        std::string classification = get_classification_result();
+        return classification;
+        
+    } catch (const std::exception& e) {
+        LOGE("Exception in run_inception_v3: %s", e.what());
+        return "";
+    }
+}
+
+bool DeviceClient::move_image_to_snpe_bundle(const std::string& image_path) {
+    LOGI("Moving image from %s to SNPE bundle", image_path.c_str());
+    
+    // Extract image filename from path
+    std::string filename = image_path.substr(image_path.find_last_of("/") + 1);
+    std::string target_path = "/data/local/tmp/snpe-bundle/images/" + filename;
+    
+    // Create images directory if it doesn't exist
+    std::string mkdir_cmd = "mkdir -p /data/local/tmp/snpe-bundle/images";
+    system(mkdir_cmd.c_str());
+    
+    // Copy image to SNPE bundle images directory  
+    std::string copy_cmd = "cp " + image_path + " " + target_path;
+    int result = system(copy_cmd.c_str());
+    
+    if (result == 0) {
+        LOGI("Image copied to %s", target_path.c_str());
+        
+        // Store the filename for later use
+        current_image_filename = filename;
+        return true;
+    } else {
+        LOGE("Failed to copy image to SNPE bundle");
+        return false;
+    }
+}
+
+std::string DeviceClient::get_image_name(const std::string& image_path) {
+    // Extract just the filename without path
+    size_t last_slash = image_path.find_last_of("/");
+    if (last_slash != std::string::npos) {
+        return image_path.substr(last_slash + 1);
+    }
+    return image_path;
+}
+
+bool DeviceClient::preprocess_image(const std::string& image_name) {
+    LOGI("Preprocessing image: %s", image_name.c_str());
+    
+    std::string snpe_bundle_dir = "/data/local/tmp/snpe-bundle";
+    
+    // Clear the target_raw_list.txt file first
+    std::string clear_cmd = "cd " + snpe_bundle_dir + " && > target_raw_list.txt";
+    system(clear_cmd.c_str());
+    
+    // Change to SNPE bundle directory and run preprocessing
+    std::string preprocess_cmd = "cd " + snpe_bundle_dir + " && "
+                               "export LD_LIBRARY_PATH=$PWD && "
+                               "./preprocess_android ./images ./cropped 299 bilinear";
+    
+    LOGI("Running preprocess command: %s", preprocess_cmd.c_str());
+    
+    int result = system(preprocess_cmd.c_str());
+    if (result != 0) {
+        LOGE("Preprocessing failed with code: %d", result);
+        return false;
+    }
+    
+    // Add the processed image to target_raw_list.txt
+    std::string raw_filename = current_image_filename;
+    // Replace extension with .raw
+    size_t dot_pos = raw_filename.find_last_of(".");
+    if (dot_pos != std::string::npos) {
+        raw_filename = raw_filename.substr(0, dot_pos) + ".raw";
+    } else {
+        raw_filename += ".raw";
+    }
+    
+    std::string list_cmd = "cd " + snpe_bundle_dir + " && echo \"cropped/" + raw_filename + "\" >> target_raw_list.txt";
+    system(list_cmd.c_str());
+    
+    LOGI("Added cropped/%s to target_raw_list.txt", raw_filename.c_str());
+    
+    // Verify the raw file exists
+    std::string check_cmd = "ls -la " + snpe_bundle_dir + "/cropped/" + raw_filename;
+    LOGI("Checking if raw file exists: %s", check_cmd.c_str());
+    system(check_cmd.c_str());
+    
+    return true;
+}
+
+bool DeviceClient::run_snpe_inference() {
+    LOGI("Running SNPE inference");
+    
+    std::string snpe_bundle_dir = "/data/local/tmp/snpe-bundle";
+    
+    // Run SNPE inference with your exact command
+    std::string snpe_cmd = "cd " + snpe_bundle_dir + " && "
+                          "export LD_LIBRARY_PATH=$PWD && "
+                          "./snpe-net-run --container inception_v3.dlc --input_list target_raw_list.txt --output_dir output";
+    
+    LOGI("Running SNPE command: %s", snpe_cmd.c_str());
+    
+    int result = system(snpe_cmd.c_str());
+    if (result == 0) {
+        LOGI("SNPE inference completed successfully");
+        return true;
+    } else {
+        LOGE("SNPE inference failed with code: %d", result);
+        return false;
+    }
+}
+
+std::string DeviceClient::get_classification_result() {
+    LOGI("Getting classification result");
+    
+    std::string snpe_bundle_dir = "/data/local/tmp/snpe-bundle";
+    
+    // Find the Result_x directory (should be Result_3 as you mentioned)
+    std::string find_result_cmd = "ls -1 " + snpe_bundle_dir + "/output/Result_*/InceptionV3/Predictions/Reshape_1:0.raw 2>/dev/null | head -1";
+    
+    FILE* fp = popen(find_result_cmd.c_str(), "r");
+    if (fp == nullptr) {
+        LOGE("Failed to find result file");
+        return "";
+    }
+    
+    char result_file_path[512];
+    if (fgets(result_file_path, sizeof(result_file_path), fp) == nullptr) {
+        LOGE("No result file found");
+        pclose(fp);
+        return "";
+    }
+    
+    // Remove newline
+    result_file_path[strcspn(result_file_path, "\n")] = 0;
+    pclose(fp);
+    
+    LOGI("Found result file: %s", result_file_path);
+    
+    // Run postprocessing to get human-readable classification
+    std::string postprocess_cmd = "cd " + snpe_bundle_dir + " && "
+                                 "./postprocess " + std::string(result_file_path) + " imagenet_slim_labels.txt";
+    
+    LOGI("Running postprocess command: %s", postprocess_cmd.c_str());
+    
+    fp = popen(postprocess_cmd.c_str(), "r");
+    if (fp == nullptr) {
+        LOGE("Failed to run postprocessing");
+        return "";
+    }
+    
+    std::string result;
+    char line[512];
+    while (fgets(line, sizeof(line), fp) != nullptr) {
+        result += line;
+    }
+    
+    pclose(fp);
+    
+    // Clean up the result
+    if (!result.empty()) {
+        // Remove trailing newline
+        while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
+            result.pop_back();
+        }
+        LOGI("Final classification result: %s", result.c_str());
+    }
+    
+    return result;
 }
 
 std::string DeviceClient::decode_base64(const std::string& encoded) {

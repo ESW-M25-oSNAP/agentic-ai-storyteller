@@ -30,42 +30,31 @@ class Orchestrator:
             threading.Thread(target=self.handle_client, args=(conn,)).start()
 
     def handle_client(self, conn):
+        buffer = ""
         while True:
             try:
                 data = conn.recv(4096).decode()
                 if not data:
                     print("Connection closed")
                     break
-                msg = json.loads(data)
-                device_id = msg.get("agent_id") or msg["data"].get("deviceId")
-                if msg["type"] == "register":
-                    self.devices[device_id] = {
-                        "has_npu": msg["data"]["hasNpu"],
-                        "capabilities": msg["data"]["capabilities"],
-                        "metrics": msg["data"]["metrics"],
-                        "conn": conn
-                    }
-                    print(f"Registered {device_id}")
-                elif msg["type"] == "status":
-                    self.devices[device_id]["metrics"] = msg["data"]["metrics"]
-                    print(f"Updated status for {device_id}: {msg['data']['metrics']}")
-                elif msg["type"] == "image":
-                    # Image received from device, initiate bidding process
-                    print(f"Image received from {device_id}")
-                    self.handle_image_received(device_id, msg["data"])
-                elif msg["type"] == "bid":
-                    # Bid received from device
-                    print(f"Bid received from {device_id}: {msg['data']}")
-                    self.handle_bid_received(device_id, msg)
-                elif msg["type"] == "result":
-                    print(f"Result from {device_id}: {msg['data']}")
-                    # For EdgeMLBalancer: Update scores with confidence
-                    task = msg["subtask"]
-                    confidence = msg["data"].get("confidence", 0.5)
-                    cpu_load = self.devices[device_id]["metrics"].get("cpu_load", 0.5)
-                    self.update_scores(task, device_id, cpu_load, confidence)
-                elif msg["type"] == "heartbeat":
-                    print(f"Heartbeat from {device_id}")
+                
+                buffer += data
+                
+                # Try to parse complete JSON messages
+                while buffer:
+                    try:
+                        # Find the end of a JSON object
+                        decoder = json.JSONDecoder()
+                        msg, idx = decoder.raw_decode(buffer)
+                        buffer = buffer[idx:].lstrip()
+                        
+                        # Process the complete message
+                        self.process_message(msg, conn)
+                        
+                    except json.JSONDecodeError:
+                        # Incomplete message, wait for more data
+                        break
+                        
             except Exception as e:
                 print(f"Error in handle_client: {e}")
                 break
@@ -75,6 +64,49 @@ class Orchestrator:
             if self.devices[dev_id]["conn"] == conn:
                 del self.devices[dev_id]
                 print(f"Removed {dev_id} from registry")
+    
+    def process_message(self, msg, conn):
+        """Process a complete JSON message"""
+        device_id = msg.get("agent_id") or msg["data"].get("deviceId")
+        
+        if msg["type"] == "register":
+            self.devices[device_id] = {
+                "has_npu": msg["data"]["hasNpu"],
+                "capabilities": msg["data"]["capabilities"],
+                "metrics": msg["data"]["metrics"],
+                "conn": conn
+            }
+            print(f"Registered {device_id}")
+        elif msg["type"] == "status":
+            if device_id in self.devices:
+                self.devices[device_id]["metrics"] = msg["data"]["metrics"]
+                print(f"Updated status for {device_id}: {msg['data']['metrics']}")
+        elif msg["type"] == "image":
+            # Image received from device, initiate bidding process
+            print(f"Image received from {device_id}")
+            self.handle_image_received(device_id, msg["data"])
+        elif msg["type"] == "bid":
+            # Bid received from device
+            print(f"Bid received from {device_id}: {msg['data']}")
+            self.handle_bid_received(device_id, msg)
+        elif msg["type"] == "result":
+            print(f"Result from {device_id}: {msg['data']}")
+            
+            # Handle classification results specifically
+            if msg['data'].get('status') == 'classification_complete':
+                classification = msg['data'].get('classification', '')
+                print(f"🎯 CLASSIFICATION RESULT from {device_id}:")
+                print(f"   {classification}")
+                print(f"   Image processed successfully!")
+                
+            # For EdgeMLBalancer: Update scores with confidence
+            task = msg["subtask"]
+            confidence = msg["data"].get("confidence", 0.5)
+            if device_id in self.devices:
+                cpu_load = self.devices[device_id]["metrics"].get("cpu_load", 0.5)
+                self.update_scores(task, device_id, cpu_load, confidence)
+        elif msg["type"] == "heartbeat":
+            print(f"Heartbeat from {device_id}")
 
     def handle_image_received(self, source_device, data):
         """Handle image received from Android device and initiate bidding"""
@@ -163,7 +195,7 @@ class Orchestrator:
             "subtask": "classify",
             "data": {
                 "image_base64": image_data,
-                "output_path": "/data/local/tmp/received-image"
+                "output_path": "/data/local/tmp/received-images"
             }
         }
         

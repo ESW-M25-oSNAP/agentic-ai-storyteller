@@ -35,6 +35,7 @@ private:
     int sock = -1;
     bool image_model_free = true;
     bool text_model_free = true;
+    std::string current_image_filename;
     float get_cpu_load();
     int get_battery_level();
     void handle_message(const Message& msg);
@@ -42,6 +43,12 @@ private:
     void handle_task(const Message& msg);
     void handle_image_classification_task(const Message& msg);
     std::string decode_base64(const std::string& encoded);
+    std::string run_inception_v3(const std::string& image_path);
+    bool move_image_to_snpe_bundle(const std::string& image_path);
+    std::string get_image_name(const std::string& image_path);
+    bool preprocess_image(const std::string& image_name);
+    bool run_snpe_inference();
+    std::string get_classification_result();
 };
 
 #endif

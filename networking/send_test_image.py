@@ -50,12 +50,14 @@ def send_image_to_orchestrator(image_path, orchestrator_host='localhost', orches
             }
         }
         
-        sock.send(json.dumps(register_msg).encode())
+        # Send registration message
+        register_json = json.dumps(register_msg)
+        sock.send(register_json.encode())
         print("Sent registration message")
         
         # Wait a moment
         import time
-        time.sleep(1)
+        time.sleep(2)
         
         # Send image message
         image_msg = {
@@ -68,10 +70,22 @@ def send_image_to_orchestrator(image_path, orchestrator_host='localhost', orches
             }
         }
         
-        sock.send(json.dumps(image_msg).encode())
+        # Send image message in chunks if it's large
+        image_json = json.dumps(image_msg)
+        print(f"Sending image message ({len(image_json)} bytes)")
+        
+        # Send in chunks to avoid buffer overflow
+        chunk_size = 4096
+        for i in range(0, len(image_json), chunk_size):
+            chunk = image_json[i:i+chunk_size]
+            sock.send(chunk.encode())
+            time.sleep(0.01)  # Small delay between chunks
+        
         print("Sent image to orchestrator")
         print("This should trigger the bidding process...")
         
+        # Keep connection open briefly to receive any immediate responses
+        time.sleep(2)
         sock.close()
         return True
         

@@ -98,3 +98,6 @@ build/
 .project
 .classpath
 .settings/
+
+android-ndk-r27d/
+networking/src/working.txt
