@@ -20,7 +20,7 @@ struct Message {
 
 class DeviceClient {
 public:
-    DeviceClient(const std::string& ip, int port, const std::string& id, bool has_npu);
+    DeviceClient(const std::string& ip, int port, const std::string& id);
     ~DeviceClient();
     bool connect();
     void listen();
@@ -33,11 +33,11 @@ private:
     std::string agent_id;
     bool has_npu;
     int sock = -1;
-    bool image_model_free = true;
-    bool text_model_free = true;
     std::string current_image_filename;
     float get_cpu_load();
     int get_battery_level();
+    json get_ram_usage();
+    json get_storage_info();
     void handle_message(const Message& msg);
     void handle_bid_request(const Message& msg);
     void handle_task(const Message& msg);

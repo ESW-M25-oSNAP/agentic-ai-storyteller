@@ -1,3 +1,4 @@
+
 #include "DeviceClient.h"
 #include <iostream>
 #include <unistd.h>
@@ -8,44 +9,56 @@
 #include <chrono>
 #include <sstream>
 #include <cstring>
+#include <sys/statvfs.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #define LOG_TAG "DeviceClient"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-DeviceClient::DeviceClient(const std::string& ip, int port, const std::string& id, bool has_npu)
-    : orchestrator_ip(ip), port(port), agent_id(id), has_npu(has_npu) {
-    std::thread([this] { send_status(); }).detach();  // Periodic status
+// Constructor implementation
+DeviceClient::DeviceClient(const std::string& ip, int port, const std::string& id)
+    : orchestrator_ip(ip), port(port), agent_id(id), has_npu(true), sock(-1) {
+    // Only initialize members here. Do not connect or start threads in constructor.
 }
-
+// Destructor implementation
 DeviceClient::~DeviceClient() {
-    if (sock >= 0) close(sock);
+    if (sock != -1) {
+        close(sock);
+    }
 }
 
+// Connect to orchestrator and register
 bool DeviceClient::connect() {
     int retries = 5;
     while (retries > 0) {
         sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) {
-            LOGE("Socket creation failed");
+            LOGE("Failed to create socket");
             return false;
         }
-
         sockaddr_in addr;
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         inet_pton(AF_INET, orchestrator_ip.c_str(), &addr.sin_addr);
-
         if (::connect(sock, (sockaddr*)&addr, sizeof(addr)) == 0) {
             LOGI("Connected to orchestrator");
-            // Send registration
+            // Send registration with comprehensive metrics
+            json metrics = {
+                {"battery", get_battery_level()},
+                {"cpu_load", get_cpu_load()},
+                {"ram", get_ram_usage()},
+                {"storage", get_storage_info()}
+            };
             json capabilities = {
                 {"deviceId", agent_id},
                 {"hasNpu", has_npu},
                 {"capabilities", has_npu ? json::array({"classify", "segment", "generate_story"}) : json::array({"classify", "generate_story"})},
-                {"metrics", {{"battery", get_battery_level()}, {"cpu_load", get_cpu_load()}, {"image_model_free", image_model_free}, {"text_model_free", text_model_free}}}
+                {"metrics", metrics}
             };
             send_message(Message{"register", agent_id, "", "", capabilities});
+            std::thread([this] { send_status(); }).detach();
             std::thread([this] { listen(); }).detach();
             return true;
         } else {
@@ -54,6 +67,24 @@ bool DeviceClient::connect() {
             std::this_thread::sleep_for(std::chrono::seconds(5));
             retries--;
         }
+    }
+    return false;
+}
+
+// NPU driver detection
+bool has_nnapi_driver() {
+    const char* dirs[] = {"/vendor/lib/hw", "/vendor/lib64/hw", "/system/lib/hw", "/system/lib64/hw"};
+    for (const char* dir : dirs) {
+        DIR* d = opendir(dir);
+        if (!d) continue;
+        struct dirent* entry;
+        while ((entry = readdir(d)) != nullptr) {
+            if (strstr(entry->d_name, "neuralnetworks") && strstr(entry->d_name, ".so")) {
+                closedir(d);
+                return true;
+            }
+        }
+        closedir(d);
     }
     return false;
 }
@@ -152,8 +183,8 @@ void DeviceClient::send_status() {
         json metrics = {
             {"battery", get_battery_level()},
             {"cpu_load", get_cpu_load()},
-            {"image_model_free", image_model_free},
-            {"text_model_free", text_model_free}
+            {"ram", get_ram_usage()},
+            {"storage", get_storage_info()}
         };
         send_message(Message{"status", agent_id, "", "", {{"metrics", metrics}}});
         std::this_thread::sleep_for(std::chrono::seconds(30));
@@ -194,6 +225,60 @@ int DeviceClient::get_battery_level() {
     return level;
 }
 
+json DeviceClient::get_ram_usage() {
+    std::ifstream file("/proc/meminfo");
+    std::string line;
+    long long mem_total = 0, mem_available = 0;
+    
+    while (std::getline(file, line)) {
+        if (line.find("MemTotal:") == 0) {
+            std::istringstream iss(line);
+            std::string label;
+            iss >> label >> mem_total;
+        } else if (line.find("MemAvailable:") == 0) {
+            std::istringstream iss(line);
+            std::string label;
+            iss >> label >> mem_available;
+        }
+        if (mem_total > 0 && mem_available > 0) break;
+    }
+    
+    long long mem_used = mem_total - mem_available;
+    float ram_usage_percent = mem_total > 0 ? (float)mem_used / mem_total * 100.0f : 0.0f;
+    
+    return json{
+        {"total_mb", mem_total / 1024},
+        {"used_mb", mem_used / 1024},
+        {"available_mb", mem_available / 1024},
+        {"usage_percent", ram_usage_percent}
+    };
+}
+
+json DeviceClient::get_storage_info() {
+    json storage_info;
+    
+    // Get storage info for /data partition using statfs
+    struct statvfs stat;
+    if (statvfs("/data", &stat) == 0) {
+        unsigned long long total = stat.f_blocks * stat.f_frsize;
+        unsigned long long free_space = stat.f_bfree * stat.f_frsize;
+        unsigned long long used = total - free_space;
+        
+        storage_info["total_gb"] = total / (1024.0 * 1024.0 * 1024.0);
+        storage_info["free_gb"] = free_space / (1024.0 * 1024.0 * 1024.0);
+        storage_info["used_gb"] = used / (1024.0 * 1024.0 * 1024.0);
+        storage_info["usage_percent"] = total > 0 ? (float)used / total * 100.0f : 0.0f;
+    } else {
+        LOGE("Failed to get storage info");
+        storage_info["total_gb"] = 0;
+        storage_info["free_gb"] = 0;
+        storage_info["used_gb"] = 0;
+        storage_info["usage_percent"] = 0;
+    }
+    
+    return storage_info;
+}
+
 void DeviceClient::handle_message(const Message& msg) {
     if (msg.type == "bid_request") {
         handle_bid_request(msg);
@@ -209,8 +294,9 @@ void DeviceClient::handle_bid_request(const Message& msg) {
     json bid_data = {
         {"cpu_load", get_cpu_load()},
         {"battery", get_battery_level()},
-        {"image_model_free", image_model_free},
-        {"text_model_free", text_model_free},
+        {"ram", get_ram_usage()},
+        {"storage", get_storage_info()},
+        {"has_npu", has_npu},
         {"timestamp", std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count()}
     };
@@ -269,13 +355,13 @@ void DeviceClient::handle_image_classification_task(const Message& msg) {
             }
             
             // Mark image model as busy
-            image_model_free = false;
+            // ...existing code...
             
             // Run Inception-V3 classification
             std::string classification_result = run_inception_v3(output_path);
             
             // Mark image model as free again
-            image_model_free = true;
+            // ...existing code...
             
             if (!classification_result.empty()) {
                 // Send classification result

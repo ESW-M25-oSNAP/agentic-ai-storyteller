@@ -10,9 +10,7 @@ int main(int argc, char* argv[]) {
     std::string agent_id = argv[1];
     std::string ip = argv[2];
     int port = std::stoi(argv[3]);
-    bool has_npu = (agent_id == "A");
-
-    DeviceClient client(ip, port, agent_id, has_npu);
+    DeviceClient client(ip, port, agent_id);
     if (!client.connect()) {
         std::cerr << "Connection failed" << std::endl;
         return 1;
