@@ -217,14 +217,31 @@ class Orchestrator:
         
         if task_id in self.pending_bids:
             self.pending_bids[task_id]["bids"][device_id] = bid_data
-            cpu_load = bid_data.get('cpu_load', 'N/A')
+            cpu_load_val = bid_data.get('cpu_load', None)
+            # Safely format CPU even if missing/non-numeric
+            if isinstance(cpu_load_val, (int, float)):
+                cpu_str = f"{cpu_load_val:.2f}"
+            else:
+                cpu_str = "N/A"
+
             battery = bid_data.get('battery', 'N/A')
             has_npu = bid_data.get('has_npu', False)
             npu_str = "✓ NPU" if has_npu else "✗ No NPU"
-            print(f"📨 Bid from {device_id}: CPU={cpu_load:.2f}, Battery={battery}%, {npu_str}")
+            print(f"📨 Bid from {device_id}: CPU={cpu_str}, Battery={battery}%, {npu_str}")
 
     def evaluate_bids(self, task_id):
-        """Evaluate bids and select winning device based on lowest CPU load"""
+        """Evaluate bids and select winning device based on a weighted score.
+
+        Scoring (higher is better):
+        - NPU: 40 points if present, else 0.
+        - Battery:
+            * battery < 20 -> 0 points
+            * 20 <= battery < 30 -> 20 points
+            * 30 <= battery -> [10 + ((min(battery, 100) - 30) / 70)] * 15 points
+        - CPU: cpu_score = (1 - cpu_load) * 10, where cpu_load is in [0,1].
+        - RAM: based on free percent. If ram.usage_percent in [0,100],
+                ram_score = ((100 - usage_percent) / 100) * 15.
+        """
         if task_id not in self.pending_bids:
             print(f"Task {task_id} not found in pending bids")
             return
@@ -238,25 +255,75 @@ class Orchestrator:
             return
         
         print(f"\n{'='*80}")
-        print(f"🎯 EVALUATING BIDS FOR TASK {task_id}")
+        print(f"🎯 EVALUATING BIDS FOR TASK {task_id} (weighted scoring)")
         print(f"{'='*80}")
         
         # Display all bids
+        scores = {}
         for dev_id, bid in bids.items():
             cpu = bid.get('cpu_load', 1.0)
             battery = bid.get('battery', 0)
             ram = bid.get('ram', {})
-            ram_percent = ram.get('usage_percent', 0) if ram else 0
-            npu = "✓" if bid.get('has_npu', False) else "✗"
-            print(f"  {dev_id}: CPU={cpu:.2%}, Battery={battery}%, RAM={ram_percent:.1f}%, NPU={npu}")
-        
-        # Select device with lowest CPU load
-        winner = min(bids.keys(), key=lambda d: bids[d].get("cpu_load", 1.0))
+            ram_percent = ram.get('usage_percent', None)
+            has_npu = bid.get('has_npu', False)
+
+            # Compute components
+            npu_score = 40 if has_npu else 0
+            if battery is None:
+                battery_score = 0
+            elif battery < 20:
+                battery_score = 0
+            elif battery < 30:
+                battery_score = 20
+            else:
+                # Clamp at 100 for the formula
+                battery_clamped = min(max(battery, 30), 100)
+                battery_score = (10 + ((battery_clamped - 30) / 70.0)) * 15
+
+            # cpu_load expected in [0,1]
+            cpu_val = cpu if isinstance(cpu, (int, float)) else 1.0
+            cpu_score = (1.0 - max(0.0, min(1.0, cpu_val))) * 10
+
+            # RAM usage_percent: lower is better
+            if isinstance(ram_percent, (int, float)):
+                ram_percent_clamped = max(0.0, min(100.0, float(ram_percent)))
+                ram_score = ((100.0 - ram_percent_clamped) / 100.0) * 15
+            else:
+                ram_score = 0
+
+            total_score = npu_score + battery_score + cpu_score + ram_score
+            scores[dev_id] = {
+                'total': total_score,
+                'npu': npu_score,
+                'battery': battery_score,
+                'cpu': cpu_score,
+                'ram': ram_score,
+                'raw_cpu': cpu,
+                'raw_battery': battery,
+                'raw_ram_percent': ram_percent if ram_percent is not None else 'N/A',
+                'has_npu': has_npu
+            }
+
+            npu_icon = '✓' if has_npu else '✗'
+            cpu_display = f"{cpu:.2%}" if isinstance(cpu, (int, float)) else 'N/A'
+            ram_display = f"{ram_percent:.1f}%" if isinstance(ram_percent, (int, float)) else 'N/A'
+            print(
+                f"  {dev_id}: CPU={cpu_display}, Battery={battery}%, RAM={ram_display}, NPU={npu_icon} "
+                f"| score={total_score:.2f} (npu={npu_score:.2f}, bat={battery_score:.2f}, cpu={cpu_score:.2f}, ram={ram_score:.2f})"
+            )
+
+        # Select device with highest total score
+        winner = max(scores.keys(), key=lambda d: scores[d]['total'])
         winner_bid = bids[winner]
         
         print(f"\n🏆 WINNER: {winner}")
         print(f"   CPU Load: {winner_bid.get('cpu_load', 0):.2%}")
         print(f"   Battery: {winner_bid.get('battery', 0)}%")
+        print(
+            f"   Score Breakdown -> total={scores[winner]['total']:.2f}, "
+            f"npu={scores[winner]['npu']:.2f}, bat={scores[winner]['battery']:.2f}, "
+            f"cpu={scores[winner]['cpu']:.2f}, ram={scores[winner]['ram']:.2f}"
+        )
         print(f"{'='*80}\n")
         
         # Send image to winning device
@@ -264,6 +331,17 @@ class Orchestrator:
         
         # Clean up
         del self.pending_bids[task_id]
+
+    # Helper left in the same file as requested; not used externally but kept for clarity
+    # on the scoring scheme described above.
+    def _example_score_formula_doc(self):
+        """
+        This stub documents the scoring scheme in-code for quick reference:
+        total = (40 if has_npu else 0)
+              + (0 if battery<20 else 20 if battery<30 else (10 + ((min(batt,100)-30)/70))*15)
+              + ((1 - cpu_load) * 10)
+              + (((100 - ram_usage_percent)/100) * 15)
+        """
 
     def send_image_to_device(self, device_id, task_id, image_data):
         """Send image to the winning device"""
