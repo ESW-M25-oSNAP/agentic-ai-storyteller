@@ -1,0 +1,18 @@
+{
+    "ttft_sec": {
+        "intercept": 0.598914308420536,
+        "coefficients": {
+            "cpu_load": 0.09583238923088948,
+            "ram_load": 0.0019275579113133944,
+            "prompt_length": 0.04303331307183063
+        }
+    },
+    "stream_speed_tps": {
+        "intercept": 10.522291712089197,
+        "coefficients": {
+            "cpu_load": -0.14183575754958164,
+            "ram_load": -0.0030481541487947586,
+            "prompt_length": 0.00945217269109178
+        }
+    }
+}
