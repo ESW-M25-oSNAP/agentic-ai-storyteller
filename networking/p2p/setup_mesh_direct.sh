@@ -33,7 +33,7 @@ echo -e "${GREEN}Found $NUM_DEVICES device(s)${NC}"
 echo ""
 
 # Assign letters
-LETTERS=("A" "C" "B" "D" "E" "F")
+LETTERS=("A" "B" "C" "D" "E" "F")
 
 for i in ${!DEVICES[@]}; do
     SERIAL="${DEVICES[$i]}"
@@ -284,14 +284,22 @@ echo ""
 echo "Device Network:"
 echo ""
 
+# Create device map file for orchestrator launcher
+DEVICE_MAP_FILE="$HOME/.mesh_device_map"
+echo "# Device Map for Mesh Network" > "$DEVICE_MAP_FILE"
+echo "# Format: DeviceID:Serial:IP" >> "$DEVICE_MAP_FILE"
+
 for i in ${!DEVICES[@]}; do
     LETTER="${LETTERS[$i]}"
     DEVICE_ID="Device_$LETTER"
     SERIAL="${DEVICES[$i]}"
     IP="${DEVICE_IPS[$DEVICE_ID]}"
     echo "  $DEVICE_ID: $IP (Serial: $SERIAL)"
+    echo "${DEVICE_ID}:${SERIAL}:${IP}" >> "$DEVICE_MAP_FILE"
 done
 
+echo ""
+echo -e "${GREEN}✓ Device map saved to: $DEVICE_MAP_FILE${NC}"
 echo ""
 echo "Next Steps:"
 echo ""
@@ -310,7 +318,11 @@ echo "3. Send test message:"
 echo "   ./send_message.sh A Device_B 'Hello from A!'"
 
 echo ""
-echo "4. Monitor all devices:"
+echo "4. Run orchestrator on a device:"
+echo "   cd ../networking && ./run_orchestrator.sh Device_A"
+
+echo ""
+echo "5. Monitor all devices:"
 echo "   python3 adb_mesh_monitor.py"
 
 echo ""
@@ -318,4 +330,5 @@ echo "Notes:"
 echo "  • Scripts deployed to: /data/local/tmp/mesh/"
 echo "  • No Termux app required (runs in ADB shell)"
 echo "  • Logs stored in: /data/local/tmp/mesh/mesh_*.log"
+echo "  • Device configuration stored in: /data/local/tmp/mesh/device_config.json"
 echo ""

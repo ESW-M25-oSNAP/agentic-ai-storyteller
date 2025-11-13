@@ -1,2 +1,0 @@
-- Note that the executables are made executable for androids with 8 gen 3 chipsets.
-- They will not execute on linux / other systems

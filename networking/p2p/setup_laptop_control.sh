@@ -33,7 +33,7 @@ echo -e "${GREEN}Found $NUM_DEVICES device(s)${NC}"
 echo ""
 
 # Assign device names
-LETTERS=("A" "C" "B" "D" "E" "F")
+LETTERS=("A" "B" "C" "D" "E" "F")
 
 declare -A DEVICE_SERIALS
 declare -A DEVICE_IPS

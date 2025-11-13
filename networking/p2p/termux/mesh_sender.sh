@@ -69,6 +69,78 @@ case "$1" in
             fi
         fi
         ;;
+    
+    bid_request)
+        TARGET="$2"
+        TASK_ID="$3"
+        TASK_DATA="$4"
+        
+        if [ "$TARGET" = "all" ]; then
+            # Broadcast bid request to all peers
+            echo "Broadcasting BID_REQUEST to all peers..."
+            SUCCESS=0
+            TOTAL=0
+            
+            while IFS=: read -r peer_id peer_ip peer_port; do
+                if [ -n "$peer_ip" ] && [ -n "$peer_port" ]; then
+                    TOTAL=$((TOTAL + 1))
+                    echo "Sending bid request to $peer_id ($peer_ip:$peer_port)..."
+                    if send_to_peer "$peer_ip" "$peer_port" "BID_REQUEST|$DEVICE_ID|$TASK_DATA"; then
+                        SUCCESS=$((SUCCESS + 1))
+                    fi
+                fi
+            done < "$PEERS_FILE"
+            
+            echo "Bid request broadcast complete: $SUCCESS/$TOTAL successful"
+        else
+            # Send to specific peer
+            PEER_INFO=$(get_peer_info "$TARGET")
+            if [ -n "$PEER_INFO" ]; then
+                PEER_IP=$(echo "$PEER_INFO" | cut -d: -f2)
+                PEER_PORT=$(echo "$PEER_INFO" | cut -d: -f3)
+                
+                echo "Sending BID_REQUEST to $TARGET ($PEER_IP:$PEER_PORT)..."
+                send_to_peer "$PEER_IP" "$PEER_PORT" "BID_REQUEST|$DEVICE_ID|$TASK_DATA"
+            else
+                echo "✗ Peer not found: $TARGET"
+                exit 1
+            fi
+        fi
+        ;;
+    
+    task)
+        TARGET="$2"
+        TASK_DATA="$3"
+        
+        PEER_INFO=$(get_peer_info "$TARGET")
+        if [ -n "$PEER_INFO" ]; then
+            PEER_IP=$(echo "$PEER_INFO" | cut -d: -f2)
+            PEER_PORT=$(echo "$PEER_INFO" | cut -d: -f3)
+            
+            echo "Sending TASK to $TARGET ($PEER_IP:$PEER_PORT)..."
+            send_to_peer "$PEER_IP" "$PEER_PORT" "TASK|$DEVICE_ID|$TASK_DATA"
+        else
+            echo "✗ Peer not found: $TARGET"
+            exit 1
+        fi
+        ;;
+    
+    raw)
+        TARGET="$2"
+        MESSAGE="$3"
+        
+        PEER_INFO=$(get_peer_info "$TARGET")
+        if [ -n "$PEER_INFO" ]; then
+            PEER_IP=$(echo "$PEER_INFO" | cut -d: -f2)
+            PEER_PORT=$(echo "$PEER_INFO" | cut -d: -f3)
+            
+            echo "Sending raw message to $TARGET ($PEER_IP:$PEER_PORT)..."
+            send_to_peer "$PEER_IP" "$PEER_PORT" "$MESSAGE"
+        else
+            echo "✗ Peer not found: $TARGET"
+            exit 1
+        fi
+        ;;
         
     slm)
         TARGET="$2"
@@ -127,17 +199,23 @@ case "$1" in
         echo "Mesh Network Message Sender"
         echo ""
         echo "Usage:"
-        echo "  $0 text <target|all> <message>     - Send text message"
-        echo "  $0 slm <target> <prompt>            - Send SLM prompt"
-        echo "  $0 discover                         - Discover peers"
-        echo "  $0 list                             - List known peers"
-        echo "  $0 add <id> <ip> [port]            - Add peer manually"
+        echo "  $0 text <target|all> <message>         - Send text message"
+        echo "  $0 bid_request <target|all> <task_id> <data> - Send bid request"
+        echo "  $0 task <target> <task_data>           - Send task"
+        echo "  $0 raw <target> <message>              - Send raw message"
+        echo "  $0 slm <target> <prompt>               - Send SLM prompt"
+        echo "  $0 discover                            - Discover peers"
+        echo "  $0 list                                - List known peers"
+        echo "  $0 add <id> <ip> [port]               - Add peer manually"
         echo ""
         echo "Examples:"
         echo "  $0 text Device_B 'Hello!'"
         echo "  $0 text all 'Broadcast message'"
+        echo "  $0 bid_request all task_123 '{\"type\":\"inference\"}'"
+        echo "  $0 task Device_B '{\"prompt\":\"Hello\"}'"
         echo "  $0 slm Device_B 'Describe a sunset'"
         echo "  $0 add Device_C 192.168.1.103 9999"
         exit 1
         ;;
 esac
+
