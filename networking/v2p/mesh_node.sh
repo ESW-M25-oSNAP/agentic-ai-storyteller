@@ -111,14 +111,18 @@ execute_cpu_prompt() {
         cd /data/local/tmp/cppllama-bundle/llama.cpp
         export LD_LIBRARY_PATH=$PWD/build/bin
         
-        # Run llama-cli with -n 5 tokens and capture full output
-        # Using same pattern as host_harness.py: capture stdout, extract generated text between prompt and [end of text]
-        FULL_OUTPUT=$(./build/bin/llama-cli -n 5 -m models/llama-3.2-3b-instruct-q4_k_m.gguf -p "$prompt" -no-cnv 2>&1)
+        # Run llama-cli and capture full output
+        # Note: Removed -n 5 limit to allow full response generation
+        FULL_OUTPUT=$(./build/bin/llama-cli -m models/llama-3.2-3b-instruct-q4_k_m.gguf -p "$prompt" -no-cnv 2>&1)
         
-        # Extract generated text: find lines after the prompt, stop at [end of text]
-        # This mirrors the host_harness.py parsing logic (lines 136-148)
-        # Using sed for better compatibility with Android toybox
-        RESULT=$(echo "$FULL_OUTPUT" | sed -n "/$prompt/,/\[end of text\]/p" | sed '1d;$d' | tr '\n' ' ')
+        # Extract generated text by removing performance stats lines
+        # Filter out lines containing: llama_perf, llama_memory, load time, eval time, sampling time, etc.
+        RESULT=$(echo "$FULL_OUTPUT" | grep -v "llama_perf" | grep -v "llama_memory" | grep -v "load time" | grep -v "eval time" | grep -v "sampling time" | grep -v "^\[" | grep -v "^$" | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        
+        # If result is empty, try alternative: get everything before the first llama_perf line
+        if [ -z "$RESULT" ] || [ "$RESULT" = " " ]; then
+            RESULT=$(echo "$FULL_OUTPUT" | sed '/llama_perf/,$d' | grep -v "^\[" | grep -v "^$" | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        fi
         
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [CPU EXEC] Execution complete" >> "$LOG_FILE"
         echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [CPU EXEC] Generated text: ${RESULT:0:200}..." >> "$LOG_FILE"
