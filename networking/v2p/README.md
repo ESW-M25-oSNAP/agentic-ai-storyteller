@@ -2,17 +2,18 @@ To run the code:
  
 1. Configure the three devices, input IP address manually and enter set NPU parameters
 `./setup_configs.sh`
+`./deploy_orchestrator.sh`
 
-2. Deploy the configured details onto the devices
+3. Deploy the configured details onto the devices
 `./deploy_to_devices.sh `
 
-3. Cleanup any running process to free the ports
+4. Cleanup any running process to free the ports
 `./nuclear_cleanup.sh`
 
-4. Start mesh on all devices simulatneously 
+5. Start mesh on all devices simulatneously 
 `./start_mesh.sh`
 
-5. Monitor all devices simultaneously 
+6. Monitor all devices simultaneously 
 `./monitor_live.sh`
 
 Or separately (recommended) on three different terminals using
