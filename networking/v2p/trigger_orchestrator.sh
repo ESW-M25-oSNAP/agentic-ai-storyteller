@@ -1,17 +1,18 @@
 #!/bin/bash
-# Trigger orchestrator mode on a specific device
-# Usage: ./trigger_orchestrator.sh <device_name>
+# Trigger orchestrator mode on a specific device with a prompt
+# Usage: ./trigger_orchestrator.sh <device_name> "<prompt>"
 
-if [ $# -lt 1 ]; then
-    echo "Usage: $0 <device_name>"
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <device_name> \"<prompt>\""
     echo ""
-    echo "Example: $0 DeviceA"
+    echo "Example: $0 DeviceA \"What is France's capital?\""
     echo ""
     echo "Available devices: DeviceA, DeviceB, DeviceC"
     exit 1
 fi
 
 DEVICE_NAME=$1
+PROMPT=$2
 DEVICE_DIR="/sdcard/mesh_network"
 
 echo "========================================="
@@ -36,9 +37,14 @@ if ! adb devices | grep -q "$SERIAL"; then
 fi
 
 echo "Sending orchestrator trigger to $DEVICE_NAME..."
+echo "Prompt: $PROMPT"
+echo ""
 
 # Create orchestrator flag file on the device
 adb -s "$SERIAL" shell "echo 'orchestrator' > $DEVICE_DIR/mode.flag"
+
+# Save the prompt to a file on the orchestrator device
+adb -s "$SERIAL" shell "echo '$PROMPT' > $DEVICE_DIR/orchestrator_prompt.txt"
 
 # Send orchestrator command to all peers (broadcast bid request)
 echo "Broadcasting bid request from $DEVICE_NAME..."

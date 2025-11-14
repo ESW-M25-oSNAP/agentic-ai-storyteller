@@ -43,5 +43,33 @@ If has_NPU is not true or npu_free is false, it chooses the device with the lowe
 Checkpoint 3
 Now, we check if the NPU is free and run an SLM on the device. This will work as follows: if a device has NPU, the first time a connection is established, a parameter NPU_free is set to true. Once a device has been chosen, if it has_NPU and NPU_free is true, an NPU_prompt is sent to the device; The NPU_free flag is set to false; the NPU_prompt is executed, and the results are sent back to the orchestrator. The orchestrator then prints these results on the screen.
 
+Checkpoint 3 implemented ✅ COMPLETE
+- Modified `trigger_orchestrator.sh` to accept a prompt parameter: `./trigger_orchestrator.sh <device_name> "<prompt>"`
+- Updated `mesh_node.sh` with prompt execution capabilities:
+  - Added `execute_npu_prompt()` function that:
+    * Runs genie-t2t-run on NPU with proper environment setup
+    * Formats prompt with Llama 3.2 chat template: `<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n{prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>`
+    * Sets `npu_free=false` during execution to prevent device from being chosen again
+    * Captures output and sends result back to orchestrator
+    * Sets `npu_free=true` after completion to make device available again
+  - Added `execute_cpu_prompt()` function that:
+    * Runs llama-cli on CPU with same flags as host_harness.py (-n 5 -no-cnv)
+    * Captures full output and parses to extract ONLY generated text (mirrors host_harness.py parsing logic)
+    * Uses sed to extract lines between prompt echo and [end of text] marker
+    * Sends clean result back to orchestrator (no debug output)
+  - Added `send_result_to_orchestrator()` to send execution results back via JSON message
+  - Server now handles `prompt_execute` messages and triggers appropriate execution (NPU/CPU)
+  - Server handles `prompt_result` messages and logs them to orchestrator.log
+- Orchestrator workflow:
+  1. Collects bids and selects device (NPU preferred, CPU fallback)
+  2. Reads prompt from orchestrator_prompt.txt (saved by trigger_orchestrator.sh)
+  3. Sends `prompt_execute` message to chosen device with prompt and execution mode
+  4. Logs "Sending prompt to <device> for NPU/CPU execution..." and "Waiting for response..."
+  5. Chosen device executes prompt in background (NPU or CPU path)
+  6. Result is captured and sent back as `prompt_result` message
+  7. Orchestrator logs "✓ Received result from <device>" with the full output
+
+Ready for deployment and testing.
+
 Checkpoint 4
 If no NPU is free (which may also be the case if no device has NPU), then a device with CPU would’ve been chosen. It sends the CPU_prompt to the device with the lowest CPU load, this is run on the CPU, and the results are sent back to the orchestrator. The orchestrator then prints these results on the screen.

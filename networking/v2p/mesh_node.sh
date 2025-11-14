@@ -67,6 +67,93 @@ create_bid() {
     echo "{\"type\":\"bid\",\"from\":\"$DEVICE_NAME\",\"has_npu\":$HAS_NPU,\"cpu_load\":$cpu_load,\"ram_load\":$ram_load,\"npu_free\":$npu_free}"
 }
 
+# Function to execute NPU prompt
+execute_npu_prompt() {
+    local prompt="$1"
+    local orchestrator_device="$2"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] Starting NPU execution..." >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] Prompt: $prompt" >> "$LOG_FILE"
+    
+    # Set NPU as busy
+    echo "false" > "$MESH_DIR/npu_free.flag"
+    
+    # Format prompt for Llama 3.2 chat template
+    FORMATTED_PROMPT="<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n${prompt}<|eot_id|><|start_header_id|>assistant<|end_header_id|>"
+    
+    # Execute on NPU (run in background and capture output)
+    (
+        cd /data/local/tmp/genie-bundle
+        export LD_LIBRARY_PATH=$PWD
+        export ADSP_LIBRARY_PATH=$PWD/hexagon-v75/unsigned
+        RESULT=$(./genie-t2t-run -c genie_config.json -p "$FORMATTED_PROMPT" 2>&1 | tail -20)
+        
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] Execution complete" >> "$LOG_FILE"
+        
+        # Send result back to orchestrator
+        send_result_to_orchestrator "$orchestrator_device" "NPU" "$RESULT"
+        
+        # Free up NPU
+        echo "true" > "$MESH_DIR/npu_free.flag"
+    ) &
+}
+
+# Function to execute CPU prompt (using host_harness.py output capture pattern)
+execute_cpu_prompt() {
+    local prompt="$1"
+    local orchestrator_device="$2"
+    
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [CPU EXEC] Starting CPU execution..." >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [CPU EXEC] Prompt: $prompt" >> "$LOG_FILE"
+    
+    # Execute on CPU (run in background and capture output)
+    (
+        cd /data/local/tmp/cppllama-bundle/llama.cpp
+        export LD_LIBRARY_PATH=$PWD/build/bin
+        
+        # Run llama-cli with -n 5 tokens and capture full output
+        # Using same pattern as host_harness.py: capture stdout, extract generated text between prompt and [end of text]
+        FULL_OUTPUT=$(./build/bin/llama-cli -n 5 -m models/llama-3.2-3b-instruct-q4_k_m.gguf -p "$prompt" -no-cnv 2>&1)
+        
+        # Extract generated text: find lines after the prompt, stop at [end of text]
+        # This mirrors the host_harness.py parsing logic (lines 136-148)
+        # Using sed for better compatibility with Android toybox
+        RESULT=$(echo "$FULL_OUTPUT" | sed -n "/$prompt/,/\[end of text\]/p" | sed '1d;$d' | tr '\n' ' ')
+        
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [CPU EXEC] Execution complete" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [CPU EXEC] Generated text: ${RESULT:0:200}..." >> "$LOG_FILE"
+        
+        # Send result back to orchestrator
+        send_result_to_orchestrator "$orchestrator_device" "CPU" "$RESULT"
+    ) &
+}
+
+# Function to send results back to orchestrator
+send_result_to_orchestrator() {
+    local orch_device="$1"
+    local exec_mode="$2"
+    local result="$3"
+    
+    # Get orchestrator IP from peers
+    ORCH_IP=""
+    i=1
+    for peer_name in $PEER_NAMES; do
+        if [ "$peer_name" = "$orch_device" ]; then
+            ORCH_IP=$(echo "$PEER_IPS" | sed -n "${i}p")
+            break
+        fi
+        i=$((i+1))
+    done
+    
+    if [ -n "$ORCH_IP" ]; then
+        # Escape result for JSON (replace quotes and newlines)
+        ESCAPED_RESULT=$(echo "$result" | sed 's/"/\\"/g' | tr '\n' ' ')
+        RESULT_MSG="{\"type\":\"prompt_result\",\"from\":\"$DEVICE_NAME\",\"exec_mode\":\"$exec_mode\",\"result\":\"$ESCAPED_RESULT\"}"
+        echo "$RESULT_MSG" | nc -w 2 "$ORCH_IP" "$LISTEN_PORT" 2>&1 &
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Sent result back to $orch_device" >> "$LOG_FILE"
+    fi
+}
+
 
 # Start server to listen for connections
 echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Starting server on port $LISTEN_PORT" >> "$LOG_FILE"
@@ -89,6 +176,31 @@ echo "$SERVER_PID" > "$MESH_DIR/server.pid"
             echo "bid_mode" > "$MESH_DIR/client_mode.flag"
             echo "$FROM_DEV" > "$MESH_DIR/orchestrator_device.flag"
             date +%s > "$MESH_DIR/bid_mode_start"
+        fi
+    elif echo "$LINE" | grep -q '"type":"prompt_execute"'; then
+        # Handle prompt execution request
+        FROM_DEV=$(echo "$LINE" | grep -o '"from":"[^"]*"' | cut -d'"' -f4)
+        EXEC_MODE=$(echo "$LINE" | grep -o '"exec_mode":"[^"]*"' | cut -d'"' -f4)
+        PROMPT=$(echo "$LINE" | grep -o '"prompt":"[^"]*"' | cut -d'"' -f4)
+        
+        if [ -n "$FROM_DEV" ] && [ -n "$EXEC_MODE" ] && [ -n "$PROMPT" ]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Received prompt_execute from $FROM_DEV (mode: $EXEC_MODE)" >> "$LOG_FILE"
+            
+            if [ "$EXEC_MODE" = "NPU" ]; then
+                execute_npu_prompt "$PROMPT" "$FROM_DEV"
+            elif [ "$EXEC_MODE" = "CPU" ]; then
+                execute_cpu_prompt "$PROMPT" "$FROM_DEV"
+            fi
+        fi
+    elif echo "$LINE" | grep -q '"type":"prompt_result"'; then
+        # Handle prompt result (orchestrator receiving results)
+        FROM_DEV=$(echo "$LINE" | grep -o '"from":"[^"]*"' | cut -d'"' -f4)
+        EXEC_MODE=$(echo "$LINE" | grep -o '"exec_mode":"[^"]*"' | cut -d'"' -f4)
+        RESULT=$(echo "$LINE" | grep -o '"result":"[^"]*"' | cut -d'"' -f4)
+        
+        if [ -n "$FROM_DEV" ]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [ORCHESTRATOR] ✓ Received result from $FROM_DEV ($EXEC_MODE)" >> "$ORCH_LOG"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [ORCHESTRATOR] Result: $RESULT" >> "$ORCH_LOG"
         fi
     fi
 done) &
@@ -186,6 +298,48 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Mesh node running, PID $$" >> 
                 echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [ORCHESTRATOR] ✓ Lowest CPU load chosen: $LOWEST_DEVICE (CPU: $LOWEST_CPU_VAL)" >> "$ORCH_LOG"
                 echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [ORCHESTRATOR] ✓ Lowest CPU load chosen: $LOWEST_DEVICE (CPU: $LOWEST_CPU_VAL)" >> "$LOG_FILE"
                 echo "CHOSEN: $LOWEST_DEVICE (CPU)" > "$MESH_DIR/chosen_device.txt"
+            fi
+            
+            # Send prompt to chosen device if prompt file exists
+            if [ -f "$MESH_DIR/orchestrator_prompt.txt" ]; then
+                PROMPT=$(cat "$MESH_DIR/orchestrator_prompt.txt")
+                CHOSEN_DEVICE=""
+                EXEC_MODE=""
+                
+                if [ "$NPU_FOUND" -eq 1 ] && [ -n "$NPU_DEVICE" ]; then
+                    CHOSEN_DEVICE="$NPU_DEVICE"
+                    EXEC_MODE="NPU"
+                elif [ -n "$LOWEST_DEVICE" ]; then
+                    CHOSEN_DEVICE="$LOWEST_DEVICE"
+                    EXEC_MODE="CPU"
+                fi
+                
+                if [ -n "$CHOSEN_DEVICE" ] && [ -n "$PROMPT" ]; then
+                    # Get chosen device IP
+                    CHOSEN_IP=""
+                    i=1
+                    for peer_name in $PEER_NAMES; do
+                        if [ "$peer_name" = "$CHOSEN_DEVICE" ]; then
+                            CHOSEN_IP=$(echo "$PEER_IPS" | sed -n "${i}p")
+                            break
+                        fi
+                        i=$((i+1))
+                    done
+                    
+                    if [ -n "$CHOSEN_IP" ]; then
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [ORCHESTRATOR] Sending prompt to $CHOSEN_DEVICE for $EXEC_MODE execution..." >> "$ORCH_LOG"
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [ORCHESTRATOR] Prompt: $PROMPT" >> "$ORCH_LOG"
+                        
+                        # Send prompt_execute message
+                        PROMPT_MSG="{\"type\":\"prompt_execute\",\"from\":\"$DEVICE_NAME\",\"exec_mode\":\"$EXEC_MODE\",\"prompt\":\"$PROMPT\"}"
+                        echo "$PROMPT_MSG" | nc -w 2 "$CHOSEN_IP" "$LISTEN_PORT" >> "$LOG_FILE" 2>&1
+                        
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [ORCHESTRATOR] Waiting for response from $CHOSEN_DEVICE..." >> "$ORCH_LOG"
+                    fi
+                fi
+                
+                # Clean up prompt file after sending
+                rm -f "$MESH_DIR/orchestrator_prompt.txt"
             fi
             
             rm -f "$BIDS_FILE"
