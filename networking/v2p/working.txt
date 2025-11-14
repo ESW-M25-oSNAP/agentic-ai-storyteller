@@ -1,10 +1,38 @@
-Working.txt
-Checkpoint 0
+Working.txtCheckpoint 2
+We need to build an orchestrator script (ideally, a bash script) that would run on each device, triggered from the laptop as [./trigger_orchestrator.sh <device name>]  which would trigger the orchestrator on a particular device. Upon starting the orchestrator, it must broadcast a message to all other devices asking for a 'bid'. Each connected device must then send a 'bid' to the orchestrating device, containing {has_NPU, CPU_Load, RAM_Load, npu_free}. The orchestrator evaluates the bids as follows -
+If has_NPU is true and npu_free is true, the orchestrator chooses the device with NPU and prints NPU chosen. 
+If has_NPU is not true or npu_free is false, it chooses the device with the lowest CPU load and prints the lowest CPU load chosen. 
+
+Checkpoint 2 implemented ✅ COMPLETE
+- Created `trigger_orchestrator.sh` script that can be run as `./trigger_orchestrator.sh <device_name>` to trigger orchestrator mode on a specific device
+- Modified `mesh_node.sh` to support orchestrator mode:
+  - Reads `has_npu` from config and initializes `npu_free` flag (true initially if device has NPU)
+  - Added helper functions to get CPU load, RAM load, and NPU status from /proc/loadavg and /proc/meminfo
+  - When orchestrator mode is triggered, the device switches from sending "hello" messages to sending "bid_request" messages
+  - **When any device receives a "bid_request" message, it switches to BID MODE**: Sets a `client_mode.flag` and starts sending bid messages instead of hello messages
+  - All devices in bid mode continuously send their bid containing {has_npu, cpu_load, ram_load, npu_free}
+  - Orchestrator collects all bids, evaluates them, and chooses device based on criteria:
+    * If any device has NPU and npu_free=true, choose that device and print "✓ NPU chosen: <device_name>"
+    * Otherwise, choose device with lowest CPU load and print "✓ Lowest CPU load chosen: <device_name> (CPU: <load>)"
+  - Results are logged to both mesh.log and orchestrator.log with detailed bid information
+  - Bid mode automatically clears after 15 seconds, returning devices to normal hello mode
+
+Tested and verified:
+- ✅ Hello messages flow correctly between all devices
+- ✅ Orchestrator trigger switches device to bid_request mode
+- ✅ Peer devices detect bid_request and switch to bid mode
+- ✅ Bids contain accurate system metrics (CPU, RAM, NPU status)
+- ✅ Orchestrator evaluates bids and selects device with NPU when available
+- ✅ Falls back to CPU-based selection when no NPU is free
+- ✅ Devices return to normal hello mode after bid collection completesckpoint 0
 I have 3 android devices connected to the same network. I would like to create a mesh network over the application layer such that each device is connected to every other android device and they can all communicate with each other. The devices should be able to connect to each other and send messages. Make it concrete and well-structured such that a single run of the mesh network ensures all nC2 combinations of devices can talk to each other.
 
 
 Checkpoint 1
-The devices must be able to broadcast messages to each other upon connection and this must be correctly received by the other devices on the network. The sending of broadcast may not be simultaneous, but must be run until all connected devices confirm connection with every other device, ie all devices receive a hello from all other devices. The devices on the first connection (ie either initial setup of mesh network or while starting mesh script on each device) must ask for parameter has_npu, which will be manually set by the user. 
+The devices on the first connection (ie either initial setup of mesh network or while starting mesh script on each device) must ask for parameter has_npu, which will be manually set by the user. 
+
+Checkpoint 1 implemented
+The `setup_configs.sh` script was updated to prompt the user for `has_npu` for each device during initial configuration. The generated `device_*_config.json` files now include a boolean field `has_npu` (true/false) for each device.
 
 Checkpoint 2
 We need to build an orchestrator script (ideally, a bash script) that would run on each device, triggered from the laptop as [./trigger_orchestrator.sh <device name>]  which would trigger the orchestrator on a particular device. Upon starting the orchestrator, it must broadcast a message to all other devices asking for a ‘bid’. Each connected device must then send a ‘bid’ to the orchestrating device, containing {has_NPU, CPU_Load, RAM_Load, npu_free}. The orchestrator evaluates the bids as follows -

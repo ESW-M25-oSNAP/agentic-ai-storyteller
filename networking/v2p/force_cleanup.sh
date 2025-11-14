@@ -1,8 +1,11 @@
 #!/bin/bash
-# Force cleanup of all mesh network processes
+# Force cleanup all mesh processes and network ports
+# Use this if you get "Address already in use" errors
+
+DEVICE_DIR="/sdcard/mesh_network"
 
 echo "========================================="
-echo "Force Cleanup of Mesh Network"
+echo "Force Cleanup Mesh Network"
 echo "========================================="
 echo ""
 
@@ -18,52 +21,30 @@ fi
 echo "Found $DEVICE_COUNT connected device(s)"
 echo ""
 
-# Function to force cleanup on a device
-cleanup_device() {
-    local DEVICE_SERIAL=$1
-    local DEVICE_NUM=$2
-    
-    echo "Cleaning up Device $DEVICE_NUM ($DEVICE_SERIAL)..."
-    
-    # Kill all nc (netcat) processes
-    echo "  Killing netcat processes..."
-    adb -s "$DEVICE_SERIAL" shell "pkill -9 nc" 2>/dev/null
-    
-    # Kill all mesh_node.sh processes
-    echo "  Killing mesh_node.sh processes..."
-    adb -s "$DEVICE_SERIAL" shell "pkill -9 -f mesh_node.sh" 2>/dev/null
-    
-    # Kill any sh processes running from mesh directory
-    echo "  Killing related shell processes..."
-    adb -s "$DEVICE_SERIAL" shell "pkill -9 -f '/sdcard/mesh_network'" 2>/dev/null
-    
-    sleep 1
-    
-    # Verify cleanup
-    NC_COUNT=$(adb -s "$DEVICE_SERIAL" shell "pgrep nc" 2>/dev/null | wc -l)
-    MESH_COUNT=$(adb -s "$DEVICE_SERIAL" shell "pgrep -f mesh_node" 2>/dev/null | wc -l)
-    
-    if [ "$NC_COUNT" -eq 0 ] && [ "$MESH_COUNT" -eq 0 ]; then
-        echo "✓ Device $DEVICE_NUM cleaned successfully"
-    else
-        echo "⚠️  Warning: Some processes may still be running on Device $DEVICE_NUM"
-        echo "   Netcat processes: $NC_COUNT"
-        echo "   Mesh processes: $MESH_COUNT"
-    fi
-    echo ""
-}
-
-# Clean up all devices
-i=1
 for device in $DEVICES; do
-    cleanup_device "$device" "$i"
-    i=$((i+1))
+    echo "Cleaning up device $device..."
+    
+    # Kill all mesh_node processes
+    adb -s "$device" shell "pkill -9 -f mesh_node.sh" 2>/dev/null
+    
+    # Kill all nc processes on port 5000
+    adb -s "$device" shell "pkill -9 nc" 2>/dev/null
+    
+    # Kill any tail processes monitoring logs
+    adb -s "$device" shell "pkill -9 -f 'tail -f'" 2>/dev/null
+    
+    # Clear all flag files
+    adb -s "$device" shell "rm -f $DEVICE_DIR/*.flag $DEVICE_DIR/*.pid $DEVICE_DIR/bid_mode_start $DEVICE_DIR/chosen_device.txt" 2>/dev/null
+    
+    echo "✓ Cleaned up device $device"
+    sleep 0.5
 done
 
+echo ""
 echo "========================================="
-echo "Cleanup Complete"
+echo "Force Cleanup Complete"
 echo "========================================="
 echo ""
-echo "You can now restart the mesh network with:"
+echo "You can now start the mesh network:"
 echo "  ./start_mesh.sh"
 echo ""

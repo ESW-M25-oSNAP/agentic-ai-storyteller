@@ -1,8 +1,7 @@
 {
   "device_name": "DeviceB",
   "listen_port": 5000,
-  "has_npu": true,
-  "free_npu": true,
+  "has_npu": false,
   "peers": [
     {
       "name": "DeviceA",

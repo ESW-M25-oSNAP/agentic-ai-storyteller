@@ -1,114 +1,57 @@
 #!/bin/bash
-# Trigger Orchestrator Script - Runs on laptop to trigger orchestrator on a specific device
+# Trigger orchestrator mode on a specific device
 # Usage: ./trigger_orchestrator.sh <device_name>
 
-DEVICE_DIR="/sdcard/mesh_network"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Check if device name provided
-if [ $# -eq 0 ]; then
-    echo "Usage: ./trigger_orchestrator.sh <device_name>"
+if [ $# -lt 1 ]; then
+    echo "Usage: $0 <device_name>"
     echo ""
-    echo "Available devices:"
-    echo "  DeviceA"
-    echo "  DeviceB"
-    echo "  DeviceC"
+    echo "Example: $0 DeviceA"
     echo ""
+    echo "Available devices: DeviceA, DeviceB, DeviceC"
     exit 1
 fi
 
 DEVICE_NAME=$1
+DEVICE_DIR="/sdcard/mesh_network"
 
 echo "========================================="
 echo "Triggering Orchestrator on $DEVICE_NAME"
 echo "========================================="
 echo ""
 
-# Map device names to config files and serials
-case "$DEVICE_NAME" in
-    "DeviceA"|"devicea"|"A"|"a")
-        DEVICE_NAME="DeviceA"
-        CONFIG_FILE="device_a_config.json"
-        ;;
-    "DeviceB"|"deviceb"|"B"|"b")
-        DEVICE_NAME="DeviceB"
-        CONFIG_FILE="device_b_config.json"
-        ;;
-    "DeviceC"|"devicec"|"C"|"c")
-        DEVICE_NAME="DeviceC"
-        CONFIG_FILE="device_c_config.json"
-        ;;
-    *)
-        echo "Error: Unknown device name '$DEVICE_NAME'"
-        echo "Valid options: DeviceA, DeviceB, DeviceC"
-        exit 1
-        ;;
+# Map device name to serial
+case $DEVICE_NAME in
+    DeviceA) SERIAL="60e0c72f";;
+    DeviceB) SERIAL="9688d142";;
+    DeviceC) SERIAL="RZCT90P1WAK";;
+    *) echo "Error: Unknown device name: $DEVICE_NAME"; 
+       echo "Available: DeviceA, DeviceB, DeviceC"; 
+       exit 1;;
 esac
 
-# Get connected devices
-DEVICES=$(adb devices | grep -w "device" | awk '{print $1}')
-DEVICE_COUNT=$(echo "$DEVICES" | wc -w)
-
-if [ "$DEVICE_COUNT" -eq 0 ]; then
-    echo "Error: No devices connected via ADB"
+# Check if device is connected
+if ! adb devices | grep -q "$SERIAL"; then
+    echo "Error: Device $DEVICE_NAME ($SERIAL) is not connected"
     exit 1
 fi
 
-echo "Found $DEVICE_COUNT connected device(s)"
-echo ""
+echo "Sending orchestrator trigger to $DEVICE_NAME..."
 
-# Find the device serial for the specified device name
-DEVICE_SERIAL=""
+# Create orchestrator flag file on the device
+adb -s "$SERIAL" shell "echo 'orchestrator' > $DEVICE_DIR/mode.flag"
 
-# Check each connected device to find the matching one
-for serial in $DEVICES; do
-    # Check if this device has the matching config
-    DEVICE_CONFIG=$(adb -s "$serial" shell "cat $DEVICE_DIR/device_config.json 2>/dev/null" | grep -o '"device_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/')
-    
-    if [ "$DEVICE_CONFIG" = "$DEVICE_NAME" ]; then
-        DEVICE_SERIAL="$serial"
-        break
-    fi
-done
-
-if [ -z "$DEVICE_SERIAL" ]; then
-    echo "Error: Could not find $DEVICE_NAME in connected devices"
-    echo ""
-    echo "Connected devices:"
-    for serial in $DEVICES; do
-        DEVICE_CONFIG=$(adb -s "$serial" shell "cat $DEVICE_DIR/device_config.json 2>/dev/null" | grep -o '"device_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/')
-        if [ -n "$DEVICE_CONFIG" ]; then
-            echo "  - $serial: $DEVICE_CONFIG"
-        else
-            echo "  - $serial: (not configured)"
-        fi
-    done
-    echo ""
-    exit 1
-fi
-
-echo "✓ Found $DEVICE_NAME on device $DEVICE_SERIAL"
-echo ""
-
-# Check if orchestrator script exists on device
-if ! adb -s "$DEVICE_SERIAL" shell "test -f $DEVICE_DIR/orchestrator.sh && echo exists" | grep -q "exists"; then
-    echo "Error: Orchestrator script not found on device"
-    echo "Please deploy scripts first using: ./deploy_orchestrator.sh"
-    exit 1
-fi
-
-echo "Starting orchestrator on $DEVICE_NAME..."
-echo "========================================="
-echo ""
-
-# Run orchestrator on the device and stream output
-adb -s "$DEVICE_SERIAL" shell "cd $DEVICE_DIR && sh orchestrator.sh"
+# Send orchestrator command to all peers (broadcast bid request)
+echo "Broadcasting bid request from $DEVICE_NAME..."
+adb -s "$SERIAL" shell "echo '{\"type\":\"orchestrator_start\",\"from\":\"$DEVICE_NAME\"}' > $DEVICE_DIR/orchestrator.cmd"
 
 echo ""
-echo "========================================="
-echo "Orchestrator completed on $DEVICE_NAME"
-echo "========================================="
+echo "✓ Orchestrator mode triggered on $DEVICE_NAME"
 echo ""
-echo "To view full logs:"
-echo "  adb -s $DEVICE_SERIAL shell cat $DEVICE_DIR/orchestrator.log"
+echo "The orchestrator is now collecting bids from all devices."
+echo ""
+echo "To view orchestrator output:"
+echo "  adb -s $SERIAL shell cat $DEVICE_DIR/orchestrator.log"
+echo ""
+echo "To view mesh logs:"
+echo "  adb -s $SERIAL shell tail -f $DEVICE_DIR/mesh.log"
 echo ""
