@@ -1,11 +1,11 @@
 #!/bin/bash
-# Start LinUCB bid listeners on all connected Android devices
-# Modified to use new LinUCB bidding system
+# Start mesh network on all connected Android devices
+# Uses ADB to execute mesh_node.py on each device
 
 DEVICE_DIR="/sdcard/mesh_network"
 
 echo "========================================="
-echo "Starting LinUCB Bid Listeners on All Devices"
+echo "Starting Mesh Network on All Devices"
 echo "========================================="
 echo ""
 
@@ -21,12 +21,12 @@ fi
 echo "Found $DEVICE_COUNT connected device(s)"
 echo ""
 
-# Function to start bid listener on a device
+# Function to start mesh on a device
 start_on_device() {
     local DEVICE_SERIAL=$1
     local DEVICE_NUM=$2
     
-    echo "Starting LinUCB bid listener on Device $DEVICE_NUM ($DEVICE_SERIAL)..."
+    echo "Starting mesh network on Device $DEVICE_NUM ($DEVICE_SERIAL)..."
     
     # Check if netcat is available
     if ! adb -s "$DEVICE_SERIAL" shell "which nc" 2>/dev/null | grep -q "nc"; then
@@ -35,28 +35,24 @@ start_on_device() {
         return 1
     fi
     
-    # Check if LinUCB solver exists
-    if ! adb -s "$DEVICE_SERIAL" shell "test -f /data/local/tmp/lini && echo exists" | grep -q "exists"; then
-        echo "⚠️  Warning: LinUCB solver not found on Device $DEVICE_NUM"
-        echo "   Run: cd device_scripts && ./deploy_lini.sh"
-        return 1
-    fi
-    
-    # Kill any existing bid_listener processes
-    adb -s "$DEVICE_SERIAL" shell "pkill -f bid_listener.sh" 2>/dev/null
+    # Kill any existing mesh_node processes
+    adb -s "$DEVICE_SERIAL" shell "pkill -f mesh_node.sh" 2>/dev/null
     sleep 1
     
-    # Start bid listener in background
-    adb -s "$DEVICE_SERIAL" shell "cd $DEVICE_DIR && sh bid_listener.sh > bid_listener.log 2>&1 &" &
+    # Start mesh node in background (use sh which is always available)
+    # Run in background without waiting for output
+    adb -s "$DEVICE_SERIAL" shell "cd $DEVICE_DIR && sh mesh_node.sh > mesh.log 2>&1 &" &
+    
+    sleep 1
     
     sleep 2
     
     # Check if process started
-    if adb -s "$DEVICE_SERIAL" shell "pgrep -f bid_listener.sh" &>/dev/null; then
-        echo "✓ LinUCB bid listener started on Device $DEVICE_NUM"
+    if adb -s "$DEVICE_SERIAL" shell "pgrep -f mesh_node.sh" &>/dev/null; then
+        echo "✓ Mesh network started on Device $DEVICE_NUM"
     else
-        echo "✗ Failed to start bid listener on Device $DEVICE_NUM"
-        echo "   Check logs: adb -s $DEVICE_SERIAL shell cat $DEVICE_DIR/bid_listener.log"
+        echo "✗ Failed to start mesh network on Device $DEVICE_NUM"
+        echo "   Check logs: adb -s $DEVICE_SERIAL shell cat $DEVICE_DIR/mesh.log"
     fi
     echo ""
 }
@@ -69,18 +65,15 @@ for device in $DEVICES; do
 done
 
 echo "========================================="
-echo "LinUCB Bid Listeners Started"
+echo "Mesh Network Startup Complete"
 echo "========================================="
 echo ""
 echo "To check status:"
-echo "  adb shell ps -A | grep bid_listener"
+echo "  ./status_mesh.sh"
 echo ""
 echo "To view logs on a device:"
-echo "  adb -s <device_serial> shell cat $DEVICE_DIR/bid_listener.log"
+echo "  adb -s <device_serial> shell cat $DEVICE_DIR/mesh.log"
 echo ""
-echo "To trigger orchestrator:"
-echo "  ./trigger_orchestrator.sh <DeviceA/B/C> \"<prompt>\""
-echo ""
-echo "To stop bid listeners:"
+echo "To stop mesh network:"
 echo "  ./stop_mesh.sh"
 echo ""

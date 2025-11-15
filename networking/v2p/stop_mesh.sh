@@ -1,10 +1,10 @@
 #!/bin/bash
-# Stop LinUCB bid listeners on all connected Android devices
+# Stop mesh network on all connected Android devices
 
 DEVICE_DIR="/sdcard/mesh_network"
 
 echo "========================================="
-echo "Stopping LinUCB Bid Listeners on All Devices"
+echo "Stopping Mesh Network on All Devices"
 echo "========================================="
 echo ""
 
@@ -20,27 +20,24 @@ fi
 echo "Found $DEVICE_COUNT connected device(s)"
 echo ""
 
-# Function to stop bid listener on a device
+# Function to stop mesh on a device
 stop_on_device() {
     local DEVICE_SERIAL=$1
     local DEVICE_NUM=$2
     
-    echo "Stopping LinUCB bid listener on Device $DEVICE_NUM ($DEVICE_SERIAL)..."
+    echo "Stopping mesh network on Device $DEVICE_NUM ($DEVICE_SERIAL)..."
     
-    # Kill bid_listener.sh processes
-    adb -s "$DEVICE_SERIAL" shell "pkill -f bid_listener.sh" 2>/dev/null
-    
-    # Also kill old mesh_node.sh if it's running
+    # Kill mesh_node.sh processes
     adb -s "$DEVICE_SERIAL" shell "pkill -f mesh_node.sh" 2>/dev/null
     
     sleep 1
     
     # Check if process stopped
-    if adb -s "$DEVICE_SERIAL" shell "pgrep -f bid_listener.sh" &>/dev/null; then
+    if adb -s "$DEVICE_SERIAL" shell "pgrep -f mesh_node.sh" &>/dev/null; then
         echo "⚠️  Process still running on Device $DEVICE_NUM, forcing kill..."
-        adb -s "$DEVICE_SERIAL" shell "pkill -9 -f bid_listener.sh" 2>/dev/null
+        adb -s "$DEVICE_SERIAL" shell "pkill -9 -f mesh_node.sh" 2>/dev/null
     else
-        echo "✓ LinUCB bid listener stopped on Device $DEVICE_NUM"
+        echo "✓ Mesh network stopped on Device $DEVICE_NUM"
     fi
     echo ""
 }
@@ -53,6 +50,6 @@ for device in $DEVICES; do
 done
 
 echo "========================================="
-echo "LinUCB Bid Listeners Stopped"
+echo "Mesh Network Stopped"
 echo "========================================="
 echo ""
