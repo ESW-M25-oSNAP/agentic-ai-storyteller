@@ -50,7 +50,17 @@ deploy_to_device() {
     # Create directory on device
     adb -s "$DEVICE_SERIAL" shell "mkdir -p $DEVICE_DIR" 2>/dev/null
     
-    # Push mesh_node.sh
+    # Push LinUCB bid_listener.sh and orchestrator.sh (NEW)
+    adb -s "$DEVICE_SERIAL" push "$SCRIPT_DIR/device_scripts/bid_listener.sh" "$DEVICE_DIR/bid_listener.sh"
+    adb -s "$DEVICE_SERIAL" shell "chmod +x $DEVICE_DIR/bid_listener.sh"
+    
+    adb -s "$DEVICE_SERIAL" push "$SCRIPT_DIR/device_scripts/orchestrator.sh" "$DEVICE_DIR/orchestrator.sh"
+    adb -s "$DEVICE_SERIAL" shell "chmod +x $DEVICE_DIR/orchestrator.sh"
+    
+    adb -s "$DEVICE_SERIAL" push "$SCRIPT_DIR/device_scripts/collect_metrics.sh" "$DEVICE_DIR/collect_metrics.sh"
+    adb -s "$DEVICE_SERIAL" shell "chmod +x $DEVICE_DIR/collect_metrics.sh"
+    
+    # Push old mesh_node.sh (for backward compatibility)
     adb -s "$DEVICE_SERIAL" push "$SCRIPT_DIR/mesh_node.sh" "$DEVICE_DIR/mesh_node.sh"
     adb -s "$DEVICE_SERIAL" shell "chmod +x $DEVICE_DIR/mesh_node.sh"
     
@@ -93,9 +103,17 @@ echo "Deployment Complete!"
 echo "========================================="
 echo ""
 echo "Files deployed to: $DEVICE_DIR on each device"
+echo "  - bid_listener.sh (LinUCB bidding)"
+echo "  - orchestrator.sh (LinUCB orchestration)"
+echo "  - collect_metrics.sh"
+echo "  - device_config.json"
+echo ""
+echo "⚠️  Don't forget to deploy LinUCB solver binary:"
+echo "  cd device_scripts && ./deploy_lini.sh"
 echo ""
 echo "Next steps:"
-echo "1. Ensure netcat (nc) is installed on devices (pkg install netcat-openbsd)"
-echo "2. Use start_mesh.sh to start the mesh network"
-echo "3. Use verify_mesh.sh to check connectivity"
+echo "1. Deploy LinUCB binary: cd device_scripts && ./deploy_lini.sh"
+echo "2. Use ./start_mesh.sh to start LinUCB bid listeners"
+echo "3. Use ./monitor_live.sh to monitor bidding activity"
+echo "4. Use ./trigger_orchestrator.sh to trigger orchestration"
 echo ""

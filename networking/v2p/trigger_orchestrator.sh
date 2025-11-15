@@ -1,5 +1,5 @@
 #!/bin/bash
-# Trigger orchestrator mode on a specific device with a prompt
+# Trigger LinUCB orchestrator on a specific device with a prompt
 # Usage: ./trigger_orchestrator.sh <device_name> "<prompt>"
 
 if [ $# -lt 2 ]; then
@@ -16,7 +16,7 @@ PROMPT=$2
 DEVICE_DIR="/sdcard/mesh_network"
 
 echo "========================================="
-echo "Triggering Orchestrator on $DEVICE_NAME"
+echo "Triggering LinUCB Orchestrator on $DEVICE_NAME"
 echo "========================================="
 echo ""
 
@@ -24,7 +24,7 @@ echo ""
 case $DEVICE_NAME in
     DeviceA) SERIAL="60e0c72f";;
     DeviceB) SERIAL="9688d142";;
-    DeviceC) SERIAL="ZD222LPWKD";;
+    DeviceC) SERIAL="RZCT90P1WAK";;
     *) echo "Error: Unknown device name: $DEVICE_NAME"; 
        echo "Available: DeviceA, DeviceB, DeviceC"; 
        exit 1;;
@@ -36,28 +36,25 @@ if ! adb devices | grep -q "$SERIAL"; then
     exit 1
 fi
 
-echo "Sending orchestrator trigger to $DEVICE_NAME..."
+echo "Sending LinUCB orchestrator trigger to $DEVICE_NAME..."
 echo "Prompt: $PROMPT"
 echo ""
 
-# Create orchestrator flag file on the device
-adb -s "$SERIAL" shell "echo 'orchestrator' > $DEVICE_DIR/mode.flag"
+# Calculate prompt length (word count approximation)
+PROMPT_LENGTH=$(echo "$PROMPT" | wc -w | awk '{print $1 * 5}')  # ~5 tokens per word
+echo "Estimated prompt length: $PROMPT_LENGTH tokens"
+echo ""
 
-# Save the prompt to a file on the orchestrator device
-adb -s "$SERIAL" shell "echo '$PROMPT' > $DEVICE_DIR/orchestrator_prompt.txt"
-
-# Send orchestrator command to all peers (broadcast bid request)
-echo "Broadcasting bid request from $DEVICE_NAME..."
-adb -s "$SERIAL" shell "echo '{\"type\":\"orchestrator_start\",\"from\":\"$DEVICE_NAME\"}' > $DEVICE_DIR/orchestrator.cmd"
+# Call the new orchestrator.sh with prompt_length parameter
+echo "Running LinUCB orchestrator (broadcasting BID_REQUEST with prompt_length=$PROMPT_LENGTH)..."
+adb -s "$SERIAL" shell "cd $DEVICE_DIR && sh orchestrator.sh $PROMPT_LENGTH"
 
 echo ""
-echo "✓ Orchestrator mode triggered on $DEVICE_NAME"
+echo "✓ LinUCB orchestrator completed on $DEVICE_NAME"
 echo ""
-echo "The orchestrator is now collecting bids from all devices."
-echo ""
-echo "To view orchestrator output:"
+echo "To view orchestrator log:"
 echo "  adb -s $SERIAL shell cat $DEVICE_DIR/orchestrator.log"
 echo ""
-echo "To view mesh logs:"
-echo "  adb -s $SERIAL shell tail -f $DEVICE_DIR/mesh.log"
+echo "To view bid listener logs:"
+echo "  adb -s $SERIAL shell cat $DEVICE_DIR/bid_listener.log"
 echo ""

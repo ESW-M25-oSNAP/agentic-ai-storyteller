@@ -1,0 +1,133 @@
+TESTING CHECKPOINT 2: LinUCB Self-Aware Bidding
+================================================
+
+CURRENT SITUATION:
+------------------
+You're seeing the OLD mesh network system output because:
+1. start_mesh.sh starts the old mesh protocol (port 5000, JSON messages)
+2. trigger_orchestrator.sh was calling the old orchestrator logic
+3. Devices are not running the new bid_listener.sh on port 5001
+
+WHAT CHANGED:
+-------------
+✅ Updated trigger_orchestrator.sh to call device_scripts/orchestrator.sh with LinUCB
+✅ Updated monitor_live.sh to show bid_listener.log and orchestrator.log
+✅ Updated README.md with new workflow
+
+NEW WORKFLOW FOR TESTING:
+--------------------------
+
+Step 1: Stop the old mesh system
+---------------------------------
+./nuclear_cleanup.sh
+
+Step 2: Deploy LinUCB binaries to devices
+------------------------------------------
+# Make sure lini binary is in device_scripts/
+cd device_scripts
+./deploy_lini.sh
+
+# Or manually:
+adb -s 60e0c72f push lini /data/local/tmp/
+adb -s 9688d142 push lini /data/local/tmp/
+adb -s RZCT90P1WAK push lini /data/local/tmp/
+
+# Set permissions
+adb -s 60e0c72f shell chmod +x /data/local/tmp/lini
+adb -s 9688d142 shell chmod +x /data/local/tmp/lini
+adb -s RZCT90P1WAK shell chmod +x /data/local/tmp/lini
+
+# Initialize state (optional - use pre-trained matrices)
+adb -s 60e0c72f push linucb_A.dat /data/local/tmp/state_A.dat
+adb -s 60e0c72f push linucb_B.dat /data/local/tmp/state_B.dat
+# Repeat for other devices...
+
+Step 3: Deploy updated bid_listener.sh and orchestrator.sh
+-----------------------------------------------------------
+# These should already be in /sdcard/mesh_network/ if you ran deploy_to_devices.sh
+# If not, push them manually:
+adb push device_scripts/bid_listener.sh /sdcard/mesh_network/
+adb push device_scripts/orchestrator.sh /sdcard/mesh_network/
+
+Step 4: Start LinUCB bid listeners (replaces start_mesh.sh)
+------------------------------------------------------------
+./start_bid_listeners.sh
+
+Expected output:
+================
+Starting Bid Listeners on All Devices
+✓ Bid listener started on DeviceA
+✓ Bid listener started on DeviceB
+✓ Bid listener started on DeviceC
+
+Step 5: Monitor in real-time
+-----------------------------
+./monitor_live.sh
+
+Expected output:
+================
+[DeviceA-BID] 2025-11-15 14:30:22 [DeviceA] Bid listener starting on port 5001
+[DeviceB-BID] 2025-11-15 14:30:22 [DeviceB] Bid listener starting on port 5001
+[DeviceC-BID] 2025-11-15 14:30:22 [DeviceC] Bid listener starting on port 5001
+
+Step 6: Trigger LinUCB orchestrator
+------------------------------------
+./trigger_orchestrator.sh DeviceB "What is a banana?"
+
+Expected output in monitor_live:
+=================================
+[DeviceB-ORCH] 2025-11-15 14:30:22 [DeviceB] Orchestrator Starting (prompt_length: 20)
+[DeviceB-ORCH] 2025-11-15 14:30:22 [DeviceB] Self score: 7.2 (cpu:25.4 ram:30.2)
+[DeviceB-ORCH] 2025-11-15 14:30:22 [DeviceB] Broadcasting BID_REQUEST to all peers
+
+[DeviceA-BID] 2025-11-15 14:30:22 [DeviceA] Received bid request: BID_REQUEST|from:10.97.68.47|prompt_length:20
+[DeviceA-BID] 2025-11-15 14:30:22 [DeviceA] Sending bid: bid_1731685822345_DeviceA score:6.8 (cpu:19.75 ram:20.59 prompt:20)
+
+[DeviceC-BID] 2025-11-15 14:30:22 [DeviceC] Received bid request: BID_REQUEST|from:10.97.68.47|prompt_length:20
+[DeviceC-BID] 2025-11-15 14:30:22 [DeviceC] Sending bid: bid_1731685822347_DeviceC score:8.2 (cpu:32.14 ram:45.23 prompt:20)
+
+[DeviceB-ORCH] 2025-11-15 14:30:52 Bid from DeviceA:
+[DeviceB-ORCH]   - bid_id: bid_1731685822345_DeviceA
+[DeviceB-ORCH]   - score: 6.8
+[DeviceB-ORCH]   ✓ Lowest score so far
+
+[DeviceB-ORCH] 2025-11-15 14:30:52 ========================================
+[DeviceB-ORCH] 2025-11-15 14:30:52 ORCHESTRATOR DECISION
+[DeviceB-ORCH] 2025-11-15 14:30:52 ========================================
+[DeviceB-ORCH] 2025-11-15 14:30:52 ✓ Lowest score chosen: DeviceA (score: 6.8, bid_id: bid_1731685822345_DeviceA)
+
+KEY DIFFERENCES FROM OLD SYSTEM:
+---------------------------------
+OLD: [ORCHESTRATOR] Self bid: bid_value=5 (cpu:31.62 ram:40.15)
+NEW: [DeviceB-ORCH] Self score: 7.2 (cpu:25.4 ram:30.2)
+
+OLD: {"type":"bid","from":"DeviceC","has_npu":false,"cpu_load":16.22,"ram_load":66}
+NEW: [DeviceC-BID] Sending bid: bid_1731685822347_DeviceC score:8.2
+
+OLD: ✓ Lowest bid chosen: DeviceB (bid: 5, cpu: 31.62%, ram: 40.15%)
+NEW: ✓ Lowest score chosen: DeviceA (score: 6.8, bid_id: bid_1731685822345_DeviceA)
+
+TROUBLESHOOTING:
+----------------
+1. If bid listeners don't start:
+   - Check logs: adb shell cat /sdcard/mesh_network/bid_listener.log
+   - Verify lini exists: adb shell ls -la /data/local/tmp/lini
+   - Check permissions: adb shell /data/local/tmp/lini --help
+
+2. If no bids received:
+   - Check ports: adb shell netstat -tuln | grep 5001
+   - Verify IPs in device_config.json match actual IPs
+   - Check orchestrator log for errors
+
+3. If LinUCB solver fails:
+   - Test manually: adb shell "/data/local/tmp/lini score 0.2 0.3 0.1"
+   - Initialize state: adb shell "/data/local/tmp/lini init"
+   - Check state files: adb shell ls -la /data/local/tmp/state_*.dat
+
+NEXT STEPS (Checkpoint 3):
+---------------------------
+Once bidding works, implement feedback loop:
+1. Measure actual SLM execution latency
+2. Send FEEDBACK_PACKET to winning device
+3. Device calls: lini train <features> <actual_latency>
+4. Matrices update and improve predictions over time
