@@ -45,12 +45,51 @@ execute_npu_prompt() {
     
     # Execute on NPU (run in background and capture output)
     (
+        START_TIME=$(date +%s)
+        
         cd /data/local/tmp/genie-bundle
         export LD_LIBRARY_PATH=$PWD
         export ADSP_LIBRARY_PATH=$PWD/hexagon-v75/unsigned
-        RESULT=$(./genie-t2t-run -c genie_config.json -p "$FORMATTED_PROMPT" 2>&1 | tail -20)
         
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] Execution complete" >> "$LOG_FILE"
+        # Capture full output to temp file
+        TEMP_OUTPUT="/data/local/tmp/npu_output_$$.txt"
+        ./genie-t2t-run -c genie_config.json -p "$FORMATTED_PROMPT" > "$TEMP_OUTPUT" 2>&1
+        
+        # Extract response (last 20 lines, clean up)
+        RESULT=$(tail -20 "$TEMP_OUTPUT" | grep -v "^$" | grep -v "Loading" | grep -v "Initializing" | head -10 | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        
+        END_TIME=$(date +%s)
+        LATENCY=$((END_TIME - START_TIME))
+        
+        echo "" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ========================================" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] Execution complete in ${LATENCY}s" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ========================================" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU OUTPUT] ${RESULT:0:500}" >> "$LOG_FILE"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ========================================" >> "$LOG_FILE"
+        echo "" >> "$LOG_FILE"
+        
+        # Log full output for debugging
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU FULL OUTPUT]:" >> "$LOG_FILE"
+        cat "$TEMP_OUTPUT" >> "$LOG_FILE"
+        echo "" >> "$LOG_FILE"
+        
+        # Send result back to orchestrator on port 5005
+        ORCHESTRATOR_IP=$(grep -A2 "\"name\"[[:space:]]*:[[:space:]]*\"$orchestrator_device\"" "$MESH_DIR/device_config.json" | grep '"ip"' | sed 's/.*"\([^"]*\)".*/\1/')
+        
+        if [ -n "$ORCHESTRATOR_IP" ]; then
+            RESULT_MSG="NPU_RESULT|from:$DEVICE_NAME|latency:$LATENCY|result:$RESULT"
+            echo "$RESULT_MSG" | nc -w 2 "$ORCHESTRATOR_IP" 5005 >> "$LOG_FILE" 2>&1
+            
+            if [ $? -eq 0 ]; then
+                echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] Result sent to orchestrator" >> "$LOG_FILE"
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] WARNING: Failed to send result to orchestrator" >> "$LOG_FILE"
+            fi
+        fi
+        
+        # Cleanup
+        rm -f "$TEMP_OUTPUT"
         
         # Free up NPU
         echo "true" > "$MESH_DIR/npu_free.flag"
@@ -152,14 +191,24 @@ while true; do
                     
                     echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Sending bid to $ORCHESTRATOR_IP: $BID_RESPONSE (npu:$HAS_NPU/$FREE_NPU cpu:$CPU_LOAD ram:$RAM_LOAD prompt:$PROMPT_LENGTH)" >> "$LOG_FILE"
                     
-                    # Send bid response to orchestrator on port 5002 (single line, no echo -e)
-                    printf "%s\n" "$BID_RESPONSE" | nc -w 2 "$ORCHESTRATOR_IP" 5002 >> "$LOG_FILE" 2>&1
-                    RC=$?
+                    # Send bid response to orchestrator on port 5002 with retry
+                    SEND_SUCCESS=0
+                    for ATTEMPT in 1 2 3; do
+                        printf "%s\n" "$BID_RESPONSE" | nc -w 3 "$ORCHESTRATOR_IP" 5002 >> "$LOG_FILE" 2>&1
+                        RC=$?
+                        
+                        if [ "$RC" -eq 0 ]; then
+                            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Bid sent successfully on attempt $ATTEMPT (BidID: $BID_ID, Score: $SCORE, NPU: $HAS_NPU/$FREE_NPU)" >> "$LOG_FILE"
+                            SEND_SUCCESS=1
+                            break
+                        else
+                            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] WARNING: Failed to send bid on attempt $ATTEMPT (nc rc=$RC)" >> "$LOG_FILE"
+                            sleep 0.5
+                        fi
+                    done
                     
-                    if [ "$RC" -eq 0 ]; then
-                        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Bid sent successfully (BidID: $BID_ID, Score: $SCORE, NPU: $HAS_NPU/$FREE_NPU)" >> "$LOG_FILE"
-                    else
-                        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ERROR: Failed to send bid to $ORCHESTRATOR_IP (nc rc=$RC, host may be unreachable)" >> "$LOG_FILE"
+                    if [ "$SEND_SUCCESS" -eq 0 ]; then
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ERROR: Failed to send bid after 3 attempts to $ORCHESTRATOR_IP" >> "$LOG_FILE"
                     fi
                 else
                     echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ERROR: LinUCB solver failed" >> "$LOG_FILE"

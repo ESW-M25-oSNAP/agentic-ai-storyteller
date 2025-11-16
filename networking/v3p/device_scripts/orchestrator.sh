@@ -35,17 +35,15 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Starting bid response listener
 BID_FILE="$MESH_DIR/bids_temp.txt"
 > "$BID_FILE"
 
-# Start background listener
-(
-    timeout $TIMEOUT nc -l -p $BID_RESPONSE_PORT > "$BID_FILE" 2>/dev/null &
-    NC_PID=$!
-    
-    # Collect responses for timeout duration
-    sleep $TIMEOUT
-    
-    # Kill listener if still running
-    kill $NC_PID 2>/dev/null
-) &
+# Start nc in background and capture pid (more robust than the subshell+timeout race)
+nc -l -p $BID_RESPONSE_PORT > "$BID_FILE" 2>/dev/null &
+NC_PID=$!
+
+# Ensure listener has started
+sleep 1
+
+# After TIMEOUT seconds, kill it if still running
+( sleep $TIMEOUT; kill $NC_PID 2>/dev/null ) &
 
 sleep 1
 
@@ -88,9 +86,28 @@ else
     BEST_BID_ID=""
 fi
 
-# Wait for responses (TIMEOUT seconds)
+# Wait for responses (up to TIMEOUT seconds) or until all peers replied
 echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Waiting for bid responses..." >> "$LOG_FILE"
-sleep $((TIMEOUT + 1))
+
+# Determine number of peers expected (non-empty entries in PEER_IPS)
+EXPECTED=$(echo "$PEER_IPS" | tr ' ' '\n' | grep -v '^$' | wc -l)
+
+if [ "$(echo "$EXPECTED" | tr -d '[:space:]')" -eq 0 ]; then
+    # No peers configured — proceed after a short pause
+    sleep 1
+else
+    START_TS=$(date +%s)
+    END_TS=$((START_TS + TIMEOUT))
+
+    while [ "$(date +%s)" -lt "$END_TS" ]; do
+        COUNT=$(grep -c "BID_RESPONSE" "$BID_FILE" 2>/dev/null || true)
+        if [ "$COUNT" -ge "$EXPECTED" ]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Received all $COUNT/$EXPECTED bids early" >> "$LOG_FILE"
+            break
+        fi
+        sleep 1
+    done
+fi
 
 echo "" >> "$LOG_FILE"
 echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Processing received bids" >> "$LOG_FILE"
@@ -164,7 +181,7 @@ if [ -n "$BEST_DEVICE" ]; then
     
     # Run llama-cli and save full output
     TEMP_OUTPUT="/data/local/tmp/llama_output_$$.txt"
-    ./build/bin/llama-cli -m models/llama-3.2-3b-instruct-q4_k_m.gguf -p "$PROMPT" -n 50 -no-cnv > "$TEMP_OUTPUT" 2>&1
+    ./build/bin/llama-cli -m models/llama-3.2-3b-instruct-q4_k_m.gguf -p "$PROMPT" -n 1000 -no-cnv > "$TEMP_OUTPUT" 2>&1
     
     # Extract ONLY the actual response text
     # The response line starts with the prompt followed by the answer

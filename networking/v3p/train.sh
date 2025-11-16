@@ -86,24 +86,31 @@ while IFS=, read -r -a cols; do
     # x_c is the constant
     x_c="$CONSTANT_C"
     
-    # x_cpu_load = original_cpu_load / 100.0
-    x_cpu_load=$(calc "${cols[$((COL_CPU_LOAD-1))]} / 100.0")
+    # x_cpu_load = original_cpu_load
+    x_cpu_load=${cols[$((COL_CPU_LOAD-1))]}
     
-    # x_ram_load = original_ram_load / 100.0
-    x_ram_load=$(calc "${cols[$((COL_RAM_LOAD-1))]} / 100.0")
+    # x_ram_load = original_ram_load
+    x_ram_load=${cols[$((COL_RAM_LOAD-1))]}
     
-    # x_plen = original_plen / 1000.0
-    x_plen=$(calc "${cols[$((COL_PLEN-1))]} / 1000.0")
+    # x_plen = original_plen
+    x_plen=${cols[$((COL_PLEN-1))]}
     
     # --- Extract and SCALE latency (y) ---
     tokens=${cols[$((COL_TOKENS-1))]}
     speed=${cols[$((COL_SPEED-1))]}
     
+    # Ensure numeric defaults to avoid bc syntax errors when fields are empty
+    tokens=${tokens:-0}
+    speed=${speed:-0}
+    x_cpu_load=${x_cpu_load:-0}
+    x_ram_load=${x_ram_load:-0}
+    x_plen=${x_plen:-0}
+
     # Calculate y_original = tokens * speed
     y_original=$(calc "$tokens * $speed")
-    
-    # y = y_original / 10000.0
-    y=$(calc "$y_original / 10000.0")
+
+    # y = y_original (assign string, do not try to execute it)
+    y="$y_original"
     
     # Create the feature vector 'x' in the specified order:
     # [c, cpu_load, ram_load, prompt_length]

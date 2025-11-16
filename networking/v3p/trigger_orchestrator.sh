@@ -24,7 +24,7 @@ echo ""
 case $DEVICE_NAME in
     DeviceA) SERIAL="60e0c72f";;
     DeviceB) SERIAL="9688d142";;
-    DeviceC) SERIAL="RZCT90P1WAK";;
+    DeviceC) SERIAL="ZD222LPWKD";;
     *) echo "Error: Unknown device name: $DEVICE_NAME"; 
        echo "Available: DeviceA, DeviceB, DeviceC"; 
        exit 1;;
