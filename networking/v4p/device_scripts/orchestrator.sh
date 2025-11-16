@@ -72,28 +72,45 @@ if [ "$SELF_HAS_NPU" = "true" ] && [ "$SELF_FREE_NPU" = "true" ]; then
     
     START_TIME=$(date +%s)
     
-    # Execute on NPU (run in background and capture output)
-    (
-        cd /data/local/tmp/genie-bundle 2>/dev/null
-        export LD_LIBRARY_PATH=$PWD
-        export ADSP_LIBRARY_PATH=$PWD/hexagon-v75/unsigned
-        
-        RESULT=$(./genie-t2t-run -c genie_config.json -p "$FORMATTED_PROMPT" 2>&1 | tail -20)
-        
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] Execution complete" >> "$LOG_FILE"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Result: $RESULT" >> "$LOG_FILE"
-        
-        # Free up NPU
-        echo "true" > "$MESH_DIR/npu_free.flag"
-    ) &
+    # Execute on NPU and capture full output
+    cd /data/local/tmp/genie-bundle 2>/dev/null
+    export LD_LIBRARY_PATH=$PWD
+    export ADSP_LIBRARY_PATH=$PWD/hexagon-v75/unsigned
+    
+    # Capture to temp file for full logging
+    TEMP_OUTPUT="/data/local/tmp/npu_output_self_$$.txt"
+    ./genie-t2t-run -c genie_config.json -p "$FORMATTED_PROMPT" > "$TEMP_OUTPUT" 2>&1
     
     END_TIME=$(date +%s)
     ACTUAL_LATENCY=$((END_TIME - START_TIME))
     
-    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ✓ NPU execution initiated locally (latency: ${ACTUAL_LATENCY}s)" >> "$LOG_FILE"
+    # Extract clean result
+    RESULT=$(tail -20 "$TEMP_OUTPUT" | grep -v "^$" | grep -v "Loading" | grep -v "Initializing" | head -10 | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    
+    echo "" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ========================================" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU EXEC] Execution complete in ${ACTUAL_LATENCY}s" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ========================================" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU OUTPUT] ${RESULT:0:500}" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ========================================" >> "$LOG_FILE"
+    echo "" >> "$LOG_FILE"
+    
+    # Log full output for debugging
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] [NPU FULL OUTPUT]:" >> "$LOG_FILE"
+    cat "$TEMP_OUTPUT" >> "$LOG_FILE"
+    echo "" >> "$LOG_FILE"
+    
+    # Cleanup
+    rm -f "$TEMP_OUTPUT"
+    
+    # Free up NPU
+    echo "true" > "$MESH_DIR/npu_free.flag"
+    
     echo ""
     echo "========================================="
-    echo "✓ NPU execution initiated on self"
+    echo "✓ NPU execution completed in ${ACTUAL_LATENCY}s"
+    echo "========================================="
+    echo "NPU OUTPUT: $RESULT"
     echo "========================================="
     echo ""
     
@@ -116,61 +133,68 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Starting persistent bid respon
 (
     LISTENER_START=$(date +%s)
     LISTENER_END=$((LISTENER_START + TIMEOUT))
+    BID_COUNTER=0
     
     while [ "$(date +%s)" -lt "$LISTENER_END" ]; do
-        # Use timeout wrapper to prevent infinite hangs on single connection
-        timeout 5 nc -l -p $BID_RESPONSE_PORT 2>/dev/null >> "$BID_FILE"
-        LISTEN_RC=$?
-        
-        # Exit code 124 = timeout (no data received)
-        # Exit code 0 = received data
-        # Exit code 1 = connection refused (retry)
-        # Continue in all cases to keep accepting connections
-        
-        if [ "$LISTEN_RC" -eq 0 ]; then
-            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Received bid response" >> "$LOG_FILE"
+        # Calculate remaining time
+        REMAINING=$((LISTENER_END - $(date +%s)))
+        if [ "$REMAINING" -le 0 ]; then
+            break
         fi
         
-        # Short pause between accepts to avoid busy loop
-        sleep 0.2
+        # Use remaining time as timeout (minimum 1 second)
+        if [ "$REMAINING" -gt 10 ]; then
+            CONN_TIMEOUT=10
+        elif [ "$REMAINING" -gt 0 ]; then
+            CONN_TIMEOUT=$REMAINING
+        else
+            CONN_TIMEOUT=1
+        fi
+        
+        BID_COUNTER=$((BID_COUNTER + 1))
+        TEMP_BID="$BID_FILE.tmp.$BID_COUNTER"
+        
+        # Listen for connection with dynamic timeout
+        timeout $CONN_TIMEOUT nc -l -p $BID_RESPONSE_PORT 2>/dev/null > "$TEMP_BID"
+        LISTEN_RC=$?
+        
+        # Log and append received data
+        if [ "$LISTEN_RC" -eq 0 ] && [ -s "$TEMP_BID" ]; then
+            BID_DATA=$(cat "$TEMP_BID")
+            echo "$BID_DATA" >> "$BID_FILE"
+            sync
+            
+            # Extract device name for logging
+            BID_DEVICE=$(echo "$BID_DATA" | grep -o 'device:[^|]*' | cut -d':' -f2)
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Received bid #$BID_COUNTER from $BID_DEVICE" >> "$LOG_FILE"
+            echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Bid content: $BID_DATA" >> "$LOG_FILE"
+            
+            rm -f "$TEMP_BID"
+        else
+            # Cleanup empty temp file
+            rm -f "$TEMP_BID"
+        fi
+        
+        # No sleep - immediately listen for next connection
     done
+    
+    # Cleanup any remaining temp files
+    rm -f "$BID_FILE.tmp."*
 ) &
 
 LISTENER_PID=$!
 
-# Ensure listener has started
-sleep 1
+# Give listener more time to bind to port and verify it's listening
+sleep 2
 
-# Broadcast bid request to all peers with prompt_length
-echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Broadcasting BID_REQUEST to all peers" >> "$LOG_FILE"
-echo "" >> "$LOG_FILE"
+# Verify listener is running
+if ps | grep -q "$LISTENER_PID.*nc"; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Bid listener confirmed running (PID: $LISTENER_PID)" >> "$LOG_FILE"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] WARNING: Bid listener may not have started properly" >> "$LOG_FILE"
+fi
 
-for peer_ip in $PEER_IPS; do
-    if [ -n "$peer_ip" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Sending bid request to $peer_ip:5001" >> "$LOG_FILE"
-        
-        # Send bid request with retries for robustness
-        BID_REQUEST="BID_REQUEST|from:$DEVICE_NAME|prompt_length:$PROMPT_LENGTH"
-        RETRY_COUNT=0
-        MAX_RETRIES=2
-        
-        while [ "$RETRY_COUNT" -le "$MAX_RETRIES" ]; do
-            (
-                printf "%s\n" "$BID_REQUEST" | nc -w 3 -q 1 "$peer_ip" 5001 >> "$LOG_FILE" 2>&1
-                RC=$?
-                if [ "$RC" -eq 0 ]; then
-                    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Bid request sent to $peer_ip (attempt $((RETRY_COUNT+1)))" >> "$LOG_FILE"
-                else
-                    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] WARNING: failed to send bid to $peer_ip (nc rc=$RC, attempt $((RETRY_COUNT+1))/$((MAX_RETRIES+1)))" >> "$LOG_FILE"
-                fi
-            ) &
-            
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-        done
-    fi
-done
-
-# Normalize self features for LinUCB
+# Calculate self score BEFORE broadcasting (to avoid delays)
 CPU_NORM=$(echo "$SELF_CPU_LOAD" | awk '{printf "%.4f", $1/100}')
 RAM_NORM=$(echo "$SELF_RAM_LOAD" | awk '{printf "%.4f", $1/100}')
 PROMPT_NORM=$(echo "$PROMPT_LENGTH" | awk '{printf "%.4f", $1/1000}')
@@ -190,6 +214,31 @@ else
     BEST_BID_ID=""
 fi
 
+# Broadcast bid request to all peers with prompt_length
+echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Broadcasting BID_REQUEST to all peers" >> "$LOG_FILE"
+echo "" >> "$LOG_FILE"
+
+for peer_ip in $PEER_IPS; do
+    if [ -n "$peer_ip" ]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Sending bid request to $peer_ip:5001" >> "$LOG_FILE"
+        
+        # Send bid request once with longer timeout
+        BID_REQUEST="BID_REQUEST|from:$DEVICE_NAME|prompt_length:$PROMPT_LENGTH"
+        
+        (
+            printf "%s\n" "$BID_REQUEST" | nc -w 5 -q 1 "$peer_ip" 5001 >> "$LOG_FILE" 2>&1
+            RC=$?
+            if [ "$RC" -eq 0 ]; then
+                echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Bid request sent to $peer_ip" >> "$LOG_FILE"
+            else
+                echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] WARNING: failed to send bid to $peer_ip (nc rc=$RC)" >> "$LOG_FILE"
+            fi
+        ) &
+    fi
+done
+
+# Don't wait for sends to complete - let them run in background
+
 # Wait for responses (up to TIMEOUT seconds) or until all peers replied
 echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Waiting for bid responses..." >> "$LOG_FILE"
 
@@ -207,8 +256,12 @@ else
     echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Waiting for $EXPECTED peer bids (timeout: ${TIMEOUT}s)" >> "$LOG_FILE"
 
     while [ "$(date +%s)" -lt "$END_TS" ]; do
+        # Sync to ensure all file writes are visible
+        sync
         COUNT=$(grep -c "BID_RESPONSE" "$BID_FILE" 2>/dev/null || true)
         ELAPSED=$(($(date +%s) - START_TS))
+        
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Waiting for bids: $COUNT/$EXPECTED received (${ELAPSED}s elapsed)" >> "$LOG_FILE"
         
         if [ "$COUNT" -ge "$EXPECTED" ]; then
             echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Received all $COUNT/$EXPECTED bids (after ${ELAPSED}s)" >> "$LOG_FILE"
@@ -225,6 +278,15 @@ fi
 echo "" >> "$LOG_FILE"
 echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Processing received bids" >> "$LOG_FILE"
 echo "----------------------------------------" >> "$LOG_FILE"
+
+# Debug: show bid file contents
+if [ -s "$BID_FILE" ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] Bid file contents:" >> "$LOG_FILE"
+    cat "$BID_FILE" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] ---" >> "$LOG_FILE"
+else
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [$DEVICE_NAME] WARNING: Bid file is empty" >> "$LOG_FILE"
+fi
 
 # Parse bid responses and select lowest score
 # First pass: check for NPU devices with free NPU
@@ -318,16 +380,54 @@ if [ -n "$BEST_DEVICE" ]; then
         TARGET_IP=$(grep -A2 "\"name\"[[:space:]]*:[[:space:]]*\"$BEST_DEVICE\"" "$CONFIG_FILE" | grep '"ip"' | sed 's/.*"\([^"]*\)".*/\1/')
         
         if [ -n "$TARGET_IP" ]; then
+            # Start result listener in background (port 5005)
+            RESULT_FILE="$MESH_DIR/npu_result_temp.txt"
+            > "$RESULT_FILE"
+            
+            (
+                timeout 60 nc -l -p 5005 2>/dev/null > "$RESULT_FILE"
+                if [ -s "$RESULT_FILE" ]; then
+                    NPU_RESULT=$(cat "$RESULT_FILE")
+                    
+                    if echo "$NPU_RESULT" | grep -q "NPU_RESULT"; then
+                        RESULT_DEVICE=$(echo "$NPU_RESULT" | grep -o 'from:[^|]*' | cut -d':' -f2)
+                        RESULT_LATENCY=$(echo "$NPU_RESULT" | grep -o 'latency:[^|]*' | cut -d':' -f2)
+                        RESULT_TEXT=$(echo "$NPU_RESULT" | grep -o 'result:.*' | cut -d':' -f2-)
+                        
+                        echo "" >> "$LOG_FILE"
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') ========================================" >> "$LOG_FILE"
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') NPU EXECUTION RESULT from $RESULT_DEVICE" >> "$LOG_FILE"
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') ========================================" >> "$LOG_FILE"
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') Latency: ${RESULT_LATENCY}s" >> "$LOG_FILE"
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') Output: $RESULT_TEXT" >> "$LOG_FILE"
+                        echo "$(date '+%Y-%m-%d %H:%M:%S') ========================================" >> "$LOG_FILE"
+                        echo "" >> "$LOG_FILE"
+                    fi
+                fi
+                rm -f "$RESULT_FILE"
+            ) &
+            
+            RESULT_LISTENER_PID=$!
+            sleep 0.5
+            
             EXEC_MSG="PROMPT_EXEC|from:$DEVICE_NAME|mode:NPU|prompt:$PROMPT"
             echo "$EXEC_MSG" | nc -w 2 "$TARGET_IP" 5004 >> "$LOG_FILE" 2>&1
             
             if [ $? -eq 0 ]; then
-                echo "$(date '+%Y-%m-%d %H:%M:%S') ✓ Prompt sent to NPU device, continuing..." >> "$LOG_FILE"
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ✓ Prompt sent to NPU device" >> "$LOG_FILE"
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ⏳ Waiting for NPU execution result (max 60s)..." >> "$LOG_FILE"
                 echo "✓ Prompt sent to NPU device"
+                echo "⏳ Waiting for NPU execution result..."
                 echo ""
+                
+                # Wait for result listener to complete or timeout
+                wait $RESULT_LISTENER_PID 2>/dev/null
+                
+                echo "$(date '+%Y-%m-%d %H:%M:%S') ✓ NPU execution tracking complete" >> "$LOG_FILE"
             else
                 echo "$(date '+%Y-%m-%d %H:%M:%S') ✗ Failed to send prompt to NPU device" >> "$LOG_FILE"
                 echo "✗ Failed to send prompt to NPU device"
+                kill $RESULT_LISTENER_PID 2>/dev/null
             fi
         else
             echo "$(date '+%Y-%m-%d %H:%M:%S') WARNING: Could not find IP for NPU device $BEST_DEVICE" >> "$LOG_FILE"
