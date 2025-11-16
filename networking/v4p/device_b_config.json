@@ -1,0 +1,17 @@
+{
+  "device_name": "DeviceB",
+  "listen_port": 5000,
+  "has_npu": false,
+  "peers": [
+    {
+      "name": "DeviceA",
+      "ip": "10.2.142.9",
+      "port": 5000
+    },
+    {
+      "name": "DeviceC",
+      "ip": "10.2.140.193",
+      "port": 5000
+    }
+  ]
+}

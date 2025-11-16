@@ -1,0 +1,32 @@
+
+Goal: Implement a decentralized, heterogeneous edge mesh where each device (Worker) maintains its own local learning model (LinUCB) to estimate its own latency, rather than a central orchestrator guessing for it.
+
+Checkpoint 1: 
+The Local Brain (Math & Logic)
+- Goal: Implement the `LinUCBSolver` class on each of the connected devices.
+- Logic: The class uses the LinUCB algorithm (Ridge Regression + Upper Confidence Bound) to calculate a "Score" (Optimistic Latency).
+- Inputs: [Bias=1.0, CPU_Load, RAM_Load, Prompt_Length].
+- Storage: It maintains a Matrix A (Covariance) and Vector b (Reward).
+- Warm Start: The Matrix A and Vector b are the Identity mtrix and b has all entries 0 initially. 
+
+Mathematical Constraints for LinUCBSolver:
+Goal: Minimize Latency (Cost). Use Lower Confidence Bound (LCB).Ridge Regression 
+Logic:Matrix A: Initialize as Identity Matrix ($I$).Vector b: Initialize as Zeros (or warm start values).
+The Calculation (getScore):First, calculate weights: $\theta = A^{-1} \cdot b$
+Predict Mean Latency: $\hat{y} = \theta^T \cdot x$
+Calculate Uncertainty (Standard Deviation): $\sigma = \sqrt{x^T \cdot A^{-1} \cdot x}$
+Final Score formula: $\text{Score} = \hat{y} - (\alpha \times \sigma)$(Note: Subtract alpha because we are optimistic about lower latency).
+
+
+Checkpoint 2: 
+Self-Aware Bidding (Protocol Refactor)
+- Goal: Move decision logic from Orchestrator to Worker.
+- Worker Change: Upon receiving a `BID_REQUEST`, the Worker gathers its stats, feeds them to its local `LinUCBSolver`, calculates a Score, and sends `{BidID, Score}` (instead of raw CPU/RAM).
+- Orchestrator Change: Simply picks the lowest Score.
+- State: Worker must store the feature state used for the bid in a `pendingBids` map.
+
+Checkpoint 3: The Feedback Loop (Learning)
+- Goal: Close the loop so devices learn from actual execution.
+- Orchestrator Change: After SLM execution, send a `FEEDBACK_PACKET` containing `{BidID, Actual_Latency}` to the Worker.
+- Worker Change: On receipt, look up the original features in `pendingBids` and call `LinUCBSolver.train()` to update the local Matrix A and Vector b.
+The Update (train):Update A: $A_{new} = A_{old} + (x \cdot x^T)$Update b: $b_{new} = b_{old} + (x \cdot \text{ActualLatency})$
