@@ -19,10 +19,12 @@ fi
 # Push binary
 if [ -n "$DEVICE" ]; then
     adb -s "$DEVICE" push "$LINI_BIN" "$BIN_PATH/"
+    adb -s "$DEVICE" push "../linucb_A.dat" "../linucb_B.dat" "$BIN_PATH/"
     adb -s "$DEVICE" shell "chmod 755 $BIN_PATH/$LINI_BIN"
     adb -s "$DEVICE" shell "cd $BIN_PATH && ./$LINI_BIN init state_A.dat state_B.dat 1.0"
 else
     adb push "$LINI_BIN" "$BIN_PATH/"
+    adb -s "$DEVICE" push "../linucb_A.dat" "../linucb_B.dat" "$BIN_PATH/"
     adb shell "chmod 755 $BIN_PATH/$LINI_BIN"
     adb shell "cd $BIN_PATH && ./$LINI_BIN init state_A.dat state_B.dat 1.0"
 fi

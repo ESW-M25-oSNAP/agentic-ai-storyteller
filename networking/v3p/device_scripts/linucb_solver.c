@@ -31,17 +31,58 @@ typedef struct {
 /* Initialize solver with Identity matrix for A and zeros for b */
 void linucb_init(LinUCBSolver *solver, double alpha) {
     solver->alpha = alpha;
-    
-    // Initialize A as Identity matrix
-    for (int i = 0; i < DIM; i++) {
-        for (int j = 0; j < DIM; j++) {
-            solver->A[i][j] = (i == j) ? 1.0 : 0.0;
+
+    const char *a_file = "linucb_A.dat";
+    const char *b_file = "linucb_B.dat";
+
+    // Try to read A matrix from file; fallback to Identity on failure
+    FILE *fa = fopen(a_file, "r");
+    if (fa) {
+        int ok = 1;
+        for (int i = 0; i < DIM; i++) {
+            for (int j = 0; j < DIM; j++) {
+                if (fscanf(fa, "%lf", &solver->A[i][j]) != 1) {
+                    ok = 0;
+                    break;
+                }
+            }
+            if (!ok) break;
+        }
+        fclose(fa);
+        if (!ok) {
+            fprintf(stderr, "Warning: Failed to fully read %s, initializing A as Identity\n", a_file);
+            for (int i = 0; i < DIM; i++) {
+                for (int j = 0; j < DIM; j++) {
+                    solver->A[i][j] = (i == j) ? 1.0 : 0.0;
+                }
+            }
+        }
+    } else {
+        // File not found: use Identity
+        for (int i = 0; i < DIM; i++) {
+            for (int j = 0; j < DIM; j++) {
+                solver->A[i][j] = (i == j) ? 1.0 : 0.0;
+            }
         }
     }
-    
-    // Initialize b as zeros
-    for (int i = 0; i < DIM; i++) {
-        solver->b[i] = 0.0;
+
+    // Try to read b vector from file; fallback to zeros on failure
+    FILE *fb = fopen(b_file, "r");
+    if (fb) {
+        int ok = 1;
+        for (int i = 0; i < DIM; i++) {
+            if (fscanf(fb, "%lf", &solver->b[i]) != 1) {
+                ok = 0;
+                break;
+            }
+        }
+        fclose(fb);
+        if (!ok) {
+            fprintf(stderr, "Warning: Failed to fully read %s, initializing b as zeros\n", b_file);
+            for (int i = 0; i < DIM; i++) solver->b[i] = 0.0;
+        }
+    } else {
+        for (int i = 0; i < DIM; i++) solver->b[i] = 0.0;
     }
 }
 

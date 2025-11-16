@@ -12,7 +12,7 @@ echo ""
 # Get device serials
 DEVICE_A="60e0c72f"
 DEVICE_B="9688d142"
-DEVICE_C="RZCT90P1WAK"
+DEVICE_C="ZD222LPWKD"
 
 # Clear old log files on all devices to start fresh
 echo "Clearing old logs on all devices..."
